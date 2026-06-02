@@ -1,8 +1,11 @@
+import unittest
+
 from opendbc.testing import parameterized
 
 from opendbc.car import CanData
 from opendbc.car.car_helpers import interfaces
 from opendbc.car.hyundai.values import CAR, HyundaiFlags
+from opendbc.car.hyundai.radar_interface import MRR30_CAN_RADAR_ADDR, MRR30_CAN_RADAR_COUNT
 from opendbc.sunnypilot.car.hyundai.escc import ESCC_MSG
 
 ESCC_CARS = [
@@ -19,8 +22,12 @@ STANDARD_RADAR_CARS = [
   (CAR.HYUNDAI_SANTA_FE, 0),
 ]
 
+MRR30_CAN_RADAR_CARS = [
+  (CAR.HYUNDAI_ELANTRA_HEV_2021, MRR30_CAN_RADAR_ADDR, MRR30_CAN_RADAR_COUNT),
+]
 
-class TestRadarInterfaceExt:
+
+class TestRadarInterfaceExt(unittest.TestCase):
 
   @staticmethod
   def _setup_platform(car_name, additional_flags=0, escc_msg=None):
@@ -117,3 +124,13 @@ class TestRadarInterfaceExt:
       cans = [(0, [CanData(0, b'', 0) for _ in range(5)])]
       rr = RD.update(cans)
       assert rr is None or len(rr.errors) > 0
+
+  @parameterized("car_name, expected_addr, expected_count", MRR30_CAN_RADAR_CARS)
+  def test_mrr30_can_radar_interface(self, car_name, expected_addr, expected_count):
+    """Test MRR30_CAN radar selection for Elantra HEV."""
+    RD, CP, _ = self._setup_platform(car_name)
+
+    assert CP.flags & HyundaiFlags.MRR30_CAN_RADAR
+    assert RD.radar_addr == expected_addr
+    assert RD.radar_count == expected_count
+    assert RD.trigger_msg == expected_addr + expected_count - 1

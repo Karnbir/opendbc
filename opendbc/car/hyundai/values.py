@@ -131,6 +131,7 @@ class HyundaiFlags(IntFlag):
   MRREVO14F_RADAR = 2 ** 27
   MRR30_RADAR = 2 ** 28
   MRR35_RADAR = 2 ** 29
+  MRR30_CAN_RADAR = 2 ** 30
 
 
 @dataclass
@@ -155,6 +156,9 @@ class HyundaiPlatformConfig(PlatformConfig):
 
     if self.flags & HyundaiFlags.MRREVO14F_RADAR:
       self.dbc_dict = {Bus.pt: "hyundai_kia_generic", Bus.radar: 'hyundai_mrrevo14f_radar_generated'}
+
+    if self.flags & HyundaiFlags.MRR30_CAN_RADAR:
+      self.dbc_dict = {Bus.pt: "hyundai_kia_generic", Bus.radar: 'hyundai_mrr30_can_radar_generated'}
 
     if self.flags & HyundaiFlags.MIN_STEER_32_MPH:
       self.specs = self.specs.override(minSteerSpeed=32 * CV.MPH_TO_MS)
@@ -226,7 +230,7 @@ class CAR(Platforms):
     [HyundaiCarDocs("Hyundai Elantra Hybrid 2021-23", video="https://youtu.be/_EdYQtV52-c",
                     car_parts=CarParts.common([CarHarness.hyundai_k]))],
     CarSpecs(mass=3017 * CV.LB_TO_KG, wheelbase=2.72, steerRatio=12.9, tireStiffnessFactor=0.65),
-    flags=HyundaiFlags.CHECKSUM_CRC8 | HyundaiFlags.HYBRID,
+    flags=HyundaiFlags.CHECKSUM_CRC8 | HyundaiFlags.HYBRID | HyundaiFlags.MRR30_CAN_RADAR,
   )
   HYUNDAI_GENESIS = HyundaiPlatformConfig(
     [

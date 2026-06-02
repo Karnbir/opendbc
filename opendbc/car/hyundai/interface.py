@@ -3,7 +3,8 @@ from opendbc.car.hyundai.hyundaicanfd import CanBus
 from opendbc.car.hyundai.values import HyundaiFlags, CAR, DBC, \
                                                    CANFD_UNSUPPORTED_LONGITUDINAL_CAR, \
                                                    UNSUPPORTED_LONGITUDINAL_CAR, HyundaiSafetyFlags
-from opendbc.car.hyundai.radar_interface import MANDO_RADAR_ADDR, MRREVO14F_RADAR_ADDR, MRR35_RADAR_ADDR, MRR30_RADAR_ADDR
+from opendbc.car.hyundai.radar_interface import MANDO_RADAR_ADDR, MRREVO14F_RADAR_ADDR, MRR35_RADAR_ADDR, MRR30_RADAR_ADDR, \
+                                                 MRR30_CAN_RADAR_ADDR, MRR30_CAN_RADAR_SIGNATURE
 from opendbc.car.interfaces import CarInterfaceBase
 from opendbc.car.disable_ecu import disable_ecu
 from opendbc.car.hyundai.carcontroller import CarController
@@ -131,15 +132,22 @@ class CarInterface(CarInterfaceBase):
 
     # Common longitudinal control setup
 
+    radar_available = False
     if ret.flags & HyundaiFlags.MRREVO14F_RADAR:
       radar_addr = MRREVO14F_RADAR_ADDR
     elif ret.flags & HyundaiFlags.MRR30_RADAR:
       radar_addr = MRR30_RADAR_ADDR
     elif ret.flags & HyundaiFlags.MRR35_RADAR:
       radar_addr = MRR35_RADAR_ADDR
+    elif ret.flags & HyundaiFlags.MRR30_CAN_RADAR:
+      radar_addr = MRR30_CAN_RADAR_ADDR
+      radar_available = candidate == CAR.HYUNDAI_ELANTRA_HEV_2021 and all(fingerprint[1].get(addr) == 8 for addr in MRR30_CAN_RADAR_SIGNATURE)
     else:
       radar_addr = MANDO_RADAR_ADDR
-    ret.radarUnavailable = radar_addr not in fingerprint[1] or Bus.radar not in DBC[ret.carFingerprint]
+
+    if not ret.flags & HyundaiFlags.MRR30_CAN_RADAR:
+      radar_available = radar_addr in fingerprint[1]
+    ret.radarUnavailable = not radar_available or Bus.radar not in DBC[ret.carFingerprint]
     ret.openpilotLongitudinalControl = alpha_long and ret.alphaLongitudinalAvailable
     ret.pcmCruise = not ret.openpilotLongitudinalControl
     ret.startingState = True

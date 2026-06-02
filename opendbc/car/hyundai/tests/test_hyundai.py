@@ -7,7 +7,7 @@ from opendbc.car.structs import CarParams
 from opendbc.car.fw_versions import build_fw_dict
 from opendbc.car.hyundai.interface import CarInterface
 from opendbc.car.hyundai.hyundaicanfd import CanBus
-from opendbc.car.hyundai.radar_interface import MANDO_RADAR_ADDR
+from opendbc.car.hyundai.radar_interface import MANDO_RADAR_ADDR, MRR30_CAN_RADAR_SIGNATURE
 from opendbc.car.hyundai.values import CAMERA_SCC_CAR, CANFD_CAR, CAN_GEARS, CAR, CHECKSUM, DATE_FW_ECUS, \
                                          HYBRID_CAR, EV_CAR, FW_QUERY_CONFIG, LEGACY_SAFETY_MODE_CAR, CANFD_FUZZY_WHITELIST, \
                                          UNSUPPORTED_LONGITUDINAL_CAR, PLATFORM_CODE_ECUS, HYUNDAI_VERSION_REQUEST_LONG, \
@@ -61,6 +61,16 @@ class TestHyundaiFingerprint(unittest.TestCase):
       if radar:
         fingerprint[1][MANDO_RADAR_ADDR] = 8
       CP = CarInterface.get_params(CAR.HYUNDAI_SONATA, fingerprint, [], False, False, False)
+      assert CP.radarUnavailable != radar
+
+    # MRR30_CAN radar is only enabled for Elantra HEV when the bus 1 signature is present.
+    for radar in (True, False):
+      fingerprint = gen_empty_fingerprint()
+      if radar:
+        for addr in MRR30_CAN_RADAR_SIGNATURE:
+          fingerprint[1][addr] = 8
+      CP = CarInterface.get_params(CAR.HYUNDAI_ELANTRA_HEV_2021, fingerprint, [], False, False, False)
+      assert CP.flags & HyundaiFlags.MRR30_CAN_RADAR
       assert CP.radarUnavailable != radar
 
   def test_alternate_limits(self):

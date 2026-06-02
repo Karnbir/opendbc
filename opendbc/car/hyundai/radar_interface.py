@@ -3,7 +3,7 @@ import math
 from opendbc.can import CANParser
 from opendbc.car import Bus, structs
 from opendbc.car.interfaces import RadarInterfaceBase
-from opendbc.car.hyundai.values import DBC, HyundaiFlags
+from opendbc.car.hyundai.values import CAR, DBC, HyundaiFlags
 
 from opendbc.sunnypilot.car.hyundai.radar_interface_ext import RadarInterfaceExt
 from opendbc.sunnypilot.car.hyundai.values import HyundaiFlagsSP
@@ -16,6 +16,12 @@ MRR30_RADAR_ADDR = 0x210
 MRR30_RADAR_COUNT = 16
 MRR35_RADAR_ADDR = 0x3A5
 MRR35_RADAR_COUNT = 32
+MRR30_CAN_RADAR_ADDR = 0x238
+MRR30_CAN_RADAR_COUNT = 0x256 - MRR30_CAN_RADAR_ADDR
+MRR30_CAN_RADAR_TRACK_COUNT = 9
+MRR30_CAN_RADAR_GROUP_SIZE = 3
+MRR30_CAN_RADAR_TRACK_END = MRR30_CAN_RADAR_ADDR + (MRR30_CAN_RADAR_TRACK_COUNT * MRR30_CAN_RADAR_GROUP_SIZE)
+MRR30_CAN_RADAR_SIGNATURE = (0x238, 0x239, 0x23a, 0x255)
 
 # POC for parsing corner radars: https://github.com/commaai/openpilot/pull/24221/
 
@@ -39,6 +45,8 @@ class RadarInterface(RadarInterfaceBase, RadarInterfaceExt):
       self.radar_addr, self.radar_count = MRR30_RADAR_ADDR, MRR30_RADAR_COUNT
     elif self.CP_flags & HyundaiFlags.MRR35_RADAR:
       self.radar_addr, self.radar_count = MRR35_RADAR_ADDR, MRR35_RADAR_COUNT
+    elif self.CP_flags & HyundaiFlags.MRR30_CAN_RADAR and CP.carFingerprint == CAR.HYUNDAI_ELANTRA_HEV_2021:
+      self.radar_addr, self.radar_count = MRR30_CAN_RADAR_ADDR, MRR30_CAN_RADAR_COUNT
     else:
       self.radar_addr, self.radar_count = MANDO_RADAR_ADDR, MANDO_RADAR_COUNT
     self.updated_messages = set()
@@ -137,6 +145,26 @@ class RadarInterface(RadarInterfaceBase, RadarInterfaceExt):
             self.pts[addr].yvRel = float('nan')
           else:
             del self.pts[addr]
+
+        elif self.CP_flags & HyundaiFlags.MRR30_CAN_RADAR and self.CP.carFingerprint == CAR.HYUNDAI_ELANTRA_HEV_2021:
+          if addr >= MRR30_CAN_RADAR_TRACK_END or (addr - MRR30_CAN_RADAR_ADDR) % MRR30_CAN_RADAR_GROUP_SIZE != 0:
+            continue
+
+          msg = self.rcp.vl[f"RADAR_TRACK_{addr:x}"]
+          if msg['STATE'] == 2 and msg['LONG_DIST'] > 0:
+            if addr not in self.pts:
+              self.pts[addr] = structs.RadarData.RadarPoint()
+              self.pts[addr].trackId = self.track_id
+              self.track_id += 1
+
+            self.pts[addr].measured = True
+            self.pts[addr].dRel = msg['LONG_DIST']
+            self.pts[addr].yRel = msg['LAT_DIST']
+            self.pts[addr].vRel = float('nan')
+            self.pts[addr].aRel = float('nan')
+            self.pts[addr].yvRel = float('nan')
+          else:
+            self.pts.pop(addr, None)
 
         else:
           msg = self.rcp.vl[f"RADAR_TRACK_{addr:x}"]
