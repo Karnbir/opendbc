@@ -5,7 +5,13 @@ from opendbc.testing import parameterized
 from opendbc.car import CanData
 from opendbc.car.car_helpers import interfaces
 from opendbc.car.hyundai.values import CAR, HyundaiFlags
-from opendbc.car.hyundai.radar_interface import MRR30_CAN_RADAR_ADDR, MRR30_CAN_RADAR_COUNT
+from opendbc.car.hyundai.radar_interface import (
+  MRR30_CAN_RADAR_ADDR,
+  MRR30_CAN_RADAR_COUNT,
+  MRR30_CAN_RADAR_GROUP_SIZE,
+  MRR30_CAN_RADAR_TRACK_COUNT,
+  MRR30_CAN_RADAR_TRACK_END,
+)
 from opendbc.sunnypilot.car.hyundai.escc import ESCC_MSG
 
 ESCC_CARS = [
@@ -134,3 +140,6 @@ class TestRadarInterfaceExt(unittest.TestCase):
     assert RD.radar_addr == expected_addr
     assert RD.radar_count == expected_count
     assert RD.trigger_msg == expected_addr + expected_count - 1
+    assert MRR30_CAN_RADAR_TRACK_COUNT == 10
+    assert MRR30_CAN_RADAR_TRACK_END == 0x256
+    assert MRR30_CAN_RADAR_ADDR + ((MRR30_CAN_RADAR_TRACK_COUNT - 1) * MRR30_CAN_RADAR_GROUP_SIZE) == 0x253

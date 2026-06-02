@@ -46,7 +46,7 @@ def generate() -> dict[str, str]:
   dbc = [HEADER]
 
   # MRR30_CAN emits one radar track across three 8-byte messages. The route-proven
-  # track groups are 0x238-0x252; 0x253-0x255 are present but sparse/status-like.
+  # track groups are 0x238-0x255.
   for a in range(0x238, 0x256, 3):
     dbc.append(f"""
 BO_ {a} RADAR_TRACK_{a:x}: 8 RADAR
