@@ -110,13 +110,13 @@ def _initialize_radar(CI: CarInterfaceBaseSP, CP: structs.CarParams, CP_SP: stru
   # Hyundai Radar
   if CP.brand == 'hyundai':
     hyundai_radar = params_dict["HyundaiRadar"]
-    if CP.carFingerprint == HYUNDAI_CAR.HYUNDAI_ELANTRA_HEV_2021 and CP.flags & HyundaiFlags.MRR30_CAN_RADAR:
-      hyundai_radar = RadarType.FULL_RADAR
+    suppress_mrr30_can_full_radar = CP.carFingerprint == HYUNDAI_CAR.HYUNDAI_ELANTRA_HEV_2021 and \
+      CP.flags & HyundaiFlags.MRR30_CAN_RADAR and CP.openpilotLongitudinalControl
     if hyundai_radar == RadarType.OFF:
       CP_SP.flags |= HyundaiFlagsSP.RADAR_OFF.value
     if hyundai_radar == RadarType.LEAD_ONLY:
       CP_SP.flags |= HyundaiFlagsSP.RADAR_LEAD_ONLY.value
-    if hyundai_radar == RadarType.FULL_RADAR:
+    if hyundai_radar == RadarType.FULL_RADAR and not suppress_mrr30_can_full_radar:
       CP_SP.flags |= HyundaiFlagsSP.RADAR_FULL_RADAR.value
 
 
