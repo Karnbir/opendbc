@@ -11,7 +11,7 @@ from collections.abc import Callable
 
 from opendbc.car import structs
 from opendbc.car.can_definitions import CanRecvCallable, CanSendCallable
-from opendbc.car.hyundai.values import HyundaiFlags
+from opendbc.car.hyundai.values import CAR as HYUNDAI_CAR, HyundaiFlags
 from opendbc.car.subaru.values import SubaruFlags
 from opendbc.car.toyota.values import ToyotaSafetyFlags
 from opendbc.sunnypilot.car.hyundai.enable_radar_tracks import enable_radar_tracks as hyundai_enable_radar_tracks
@@ -110,6 +110,8 @@ def _initialize_radar(CI: CarInterfaceBaseSP, CP: structs.CarParams, CP_SP: stru
   # Hyundai Radar
   if CP.brand == 'hyundai':
     hyundai_radar = params_dict["HyundaiRadar"]
+    if CP.carFingerprint == HYUNDAI_CAR.HYUNDAI_ELANTRA_HEV_2021 and CP.flags & HyundaiFlags.MRR30_CAN_RADAR:
+      hyundai_radar = RadarType.FULL_RADAR
     if hyundai_radar == RadarType.OFF:
       CP_SP.flags |= HyundaiFlagsSP.RADAR_OFF.value
     if hyundai_radar == RadarType.LEAD_ONLY:

@@ -12,7 +12,10 @@ from opendbc.car.hyundai.radar_interface import (
   MRR30_CAN_RADAR_TRACK_COUNT,
   MRR30_CAN_RADAR_TRACK_END,
 )
+from opendbc.sunnypilot.car.interfaces import setup_interfaces
 from opendbc.sunnypilot.car.hyundai.escc import ESCC_MSG
+from opendbc.sunnypilot.car.hyundai.longitudinal.helpers import RadarType
+from opendbc.sunnypilot.car.hyundai.values import HyundaiFlagsSP
 
 ESCC_CARS = [
   (CAR.HYUNDAI_ELANTRA_2021, ESCC_MSG),
@@ -143,3 +146,15 @@ class TestRadarInterfaceExt(unittest.TestCase):
     assert MRR30_CAN_RADAR_TRACK_COUNT == 10
     assert MRR30_CAN_RADAR_TRACK_END == 0x256
     assert MRR30_CAN_RADAR_ADDR + ((MRR30_CAN_RADAR_TRACK_COUNT - 1) * MRR30_CAN_RADAR_GROUP_SIZE) == 0x253
+
+  @parameterized("car_name", [CAR.HYUNDAI_ELANTRA_HEV_2021])
+  def test_mrr30_can_radar_tracks_auto_enabled(self, car_name):
+    """Elantra HEV MRR30_CAN tracks are route-proven, so enable full radar by default."""
+    CarInterface = interfaces[car_name]
+    CP = CarInterface.get_non_essential_params(car_name)
+    CP_SP = CarInterface.get_non_essential_params_sp(CP, car_name)
+
+    setup_interfaces(CarInterface, CP, CP_SP, [{"HyundaiRadar": RadarType.OFF}], None, None)
+
+    assert CP_SP.flags & HyundaiFlagsSP.RADAR_FULL_RADAR
+    assert not CP_SP.flags & HyundaiFlagsSP.RADAR_OFF
