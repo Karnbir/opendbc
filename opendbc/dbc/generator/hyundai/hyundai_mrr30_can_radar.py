@@ -42,11 +42,17 @@ BU_: XXX
     """
 
 
+REL_SPEED_FACTOR = 0.016
+
+
 def generate() -> dict[str, str]:
   dbc = [HEADER]
 
   # MRR30_CAN emits one radar track across three 8-byte messages. The route-proven
   # track groups are 0x238-0x255.
+  # REL_SPEED is the route-derived candidate from the second message. It matches
+  # SCC11.ACC_ObjRelSpd on the stock-SCC route strongly for the primary lead, but
+  # REL_ACCEL and lateral velocity remain unconfirmed.
   for a in range(0x238, 0x256, 3):
     dbc.append(f"""
 BO_ {a} RADAR_TRACK_{a:x}: 8 RADAR
@@ -58,7 +64,7 @@ BO_ {a+1} RADAR_TRACK_{a+1:x}: 8 RADAR
  SG_ UNKNOWN_1 : 6|10@1+ (1,0) [0|1023] "" XXX
  SG_ UNKNOWN_2 : 16|10@1+ (1,0) [0|1023] "" XXX
  SG_ UNKNOWN_4 : 42|2@1+ (1,0) [0|3] "" XXX
- SG_ UNKNOWN_3 : 44|12@1- (1,0) [-2048|2047] "" XXX
+ SG_ REL_SPEED : 44|12@1- ({REL_SPEED_FACTOR},0) [-32.768|32.752] "m/s" XXX
 
 BO_ {a+2} RADAR_TRACK_{a+2:x}: 8 RADAR
  SG_ UNKNOWN_6 : 10|6@1+ (1,0) [0|63] "" XXX

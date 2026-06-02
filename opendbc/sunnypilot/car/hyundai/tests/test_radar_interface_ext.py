@@ -161,8 +161,8 @@ class TestRadarInterfaceExt(unittest.TestCase):
     assert not CP_SP.flags & HyundaiFlagsSP.RADAR_FULL_RADAR
 
   @parameterized("car_name", [CAR.HYUNDAI_ELANTRA_HEV_2021])
-  def test_mrr30_can_full_radar_suppressed_with_alpha_long(self, car_name):
-    """Do not allow unvalidated MRR30_CAN full-radar fusion while alpha long is active."""
+  def test_mrr30_can_explicit_full_radar_allowed_with_alpha_long(self, car_name):
+    """Explicit full-radar mode is allowed for alpha-long validation, but not auto-enabled."""
     CarInterface = interfaces[car_name]
     CP = CarInterface.get_non_essential_params(car_name)
     CP.openpilotLongitudinalControl = True
@@ -170,14 +170,14 @@ class TestRadarInterfaceExt(unittest.TestCase):
 
     setup_interfaces(CarInterface, CP, CP_SP, [{"HyundaiRadar": RadarType.FULL_RADAR}], None, None)
 
-    assert not CP_SP.flags & HyundaiFlagsSP.RADAR_FULL_RADAR
+    assert CP_SP.flags & HyundaiFlagsSP.RADAR_FULL_RADAR
 
   @parameterized("car_name", [CAR.HYUNDAI_ELANTRA_HEV_2021])
   def test_mrr30_can_explicit_full_radar_allows_tenth_group(self, car_name):
-    """Stock-SCC/replay full-radar mode can still parse the route-proven 0x253 group."""
+    """Full-radar mode parses the route-proven 0x253 group and route-derived vRel."""
     CarInterface = interfaces[car_name]
     CP = CarInterface.get_non_essential_params(car_name)
-    CP.openpilotLongitudinalControl = False
+    CP.openpilotLongitudinalControl = True
     CP_SP = CarInterface.get_non_essential_params_sp(CP, car_name)
 
     setup_interfaces(CarInterface, CP, CP_SP, [{"HyundaiRadar": RadarType.FULL_RADAR}], None, None)
@@ -190,6 +190,7 @@ class TestRadarInterfaceExt(unittest.TestCase):
     msg["STATE"] = 2
     msg["LONG_DIST"] = 42.0
     msg["LAT_DIST"] = -1.5
+    RD.rcp.vl["RADAR_TRACK_254"]["REL_SPEED"] = -2.0
 
     rr = RD._update({RD.trigger_msg})
 
@@ -197,7 +198,7 @@ class TestRadarInterfaceExt(unittest.TestCase):
     pt = rr.points[0]
     assert pt.dRel == 42.0
     assert pt.yRel == -1.5
+    assert pt.vRel == -2.0
     assert pt.measured
-    assert math.isnan(pt.vRel)
     assert math.isnan(pt.aRel)
     assert math.isnan(pt.yvRel)
