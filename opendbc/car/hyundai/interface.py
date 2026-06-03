@@ -1,7 +1,7 @@
 from opendbc.car import Bus, get_safety_config, structs, uds
 from opendbc.car.hyundai.hyundaicanfd import CanBus
 from opendbc.car.hyundai.values import HyundaiFlags, CAR, DBC, HyundaiSafetyFlags
-from opendbc.car.hyundai.radar_interface import RADAR_START_ADDR
+from opendbc.car.hyundai.radar_interface import RADAR_START_ADDR, MRR30_CAN_RADAR_SIGNATURE
 from opendbc.car.interfaces import CarInterfaceBase
 from opendbc.car.disable_ecu import disable_ecu
 from opendbc.car.hyundai.carcontroller import CarController
@@ -130,7 +130,11 @@ class CarInterface(CarInterfaceBase):
 
     # Common longitudinal control setup
 
-    ret.radarUnavailable = RADAR_START_ADDR not in fingerprint[1] or Bus.radar not in DBC[ret.carFingerprint]
+    radar_available = RADAR_START_ADDR in fingerprint[1]
+    if ret.flags & HyundaiFlags.MRR30_CAN_RADAR:
+      radar_available = candidate == CAR.HYUNDAI_ELANTRA_HEV_2021 and all(fingerprint[1].get(addr) == 8 for addr in MRR30_CAN_RADAR_SIGNATURE)
+
+    ret.radarUnavailable = not radar_available or Bus.radar not in DBC[ret.carFingerprint]
     ret.openpilotLongitudinalControl = alpha_long and ret.alphaLongitudinalAvailable
     ret.pcmCruise = not ret.openpilotLongitudinalControl
     ret.startingState = True

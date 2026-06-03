@@ -11,7 +11,7 @@ from collections.abc import Callable
 
 from opendbc.car import structs
 from opendbc.car.can_definitions import CanRecvCallable, CanSendCallable
-from opendbc.car.hyundai.values import HyundaiFlags
+from opendbc.car.hyundai.values import CAR as HYUNDAI_CAR, HyundaiFlags
 from opendbc.car.subaru.values import SubaruFlags
 from opendbc.car.toyota.values import ToyotaSafetyFlags
 from opendbc.sunnypilot.car.hyundai.enable_radar_tracks import enable_radar_tracks as hyundai_enable_radar_tracks
@@ -85,6 +85,7 @@ def setup_interfaces(CI, CP: structs.CarParams, CP_SP: structs.CarParamsSP,
 
   _initialize_custom_longitudinal_tuning(CI, CP, CP_SP, params_dict)
   _initialize_coop_steering(CP, CP_SP, params_dict)
+  _initialize_radar(CP, CP_SP)
   _initialize_radar_tracks(CP, CP_SP, can_recv, can_send)
   _initialize_stop_and_go(CP, CP_SP, params_dict)
   _initialize_toyota(CP, CP_SP, params_dict)
@@ -110,6 +111,11 @@ def _initialize_coop_steering(CP: structs.CarParams, CP_SP: structs.CarParamsSP,
     coop_steering = int(params_dict.get("TeslaCoopSteering", 0)) == 1
     if coop_steering:
       CP_SP.flags |= TeslaFlagsSP.COOP_STEERING.value
+
+
+def _initialize_radar(CP: structs.CarParams, CP_SP: structs.CarParamsSP) -> None:
+  if CP.brand == 'hyundai' and CP.carFingerprint == HYUNDAI_CAR.HYUNDAI_ELANTRA_HEV_2021 and CP.flags & HyundaiFlags.MRR30_CAN_RADAR:
+    CP_SP.flags |= HyundaiFlagsSP.RADAR_FULL_RADAR.value
 
 
 def _initialize_radar_tracks(CP: structs.CarParams, CP_SP: structs.CarParamsSP,
