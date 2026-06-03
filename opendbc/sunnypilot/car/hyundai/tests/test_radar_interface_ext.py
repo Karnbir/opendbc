@@ -183,3 +183,29 @@ class TestRadarInterfaceExt(unittest.TestCase):
     self.assertTrue(pt.measured)
     self.assertTrue(math.isnan(pt.aRel))
     self.assertTrue(math.isnan(pt.yvRel))
+
+  @parameterized("car_name", [CAR.HYUNDAI_ELANTRA_HEV_2021])
+  def test_mrr30_can_suppresses_duplicate_close_detections(self, car_name):
+    """Close MRR30_CAN detections with the same y/v signature are one object cluster."""
+    CarInterface = interfaces[car_name]
+    CP = CarInterface.get_non_essential_params(car_name)
+    CP.radarUnavailable = False
+    CP_SP = CarInterface.get_non_essential_params_sp(CP, car_name)
+
+    setup_interfaces(CarInterface, CP, CP_SP, [], None, None)
+
+    CI = CarInterface(CP, CP_SP)
+    RD = CI.RadarInterface(CP, CP_SP)
+
+    for addr, d_rel in ((0x238, 3.0), (0x23b, 4.0), (0x23e, 9.0)):
+      RD.rcp.vl[f"RADAR_TRACK_{addr:x}"]["STATE"] = 2
+      RD.rcp.vl[f"RADAR_TRACK_{addr:x}"]["LONG_DIST"] = d_rel
+      RD.rcp.vl[f"RADAR_TRACK_{addr:x}"]["LAT_DIST"] = -1.2
+      RD.rcp.vl[f"RADAR_TRACK_{addr + 1:x}"]["REL_SPEED"] = 0.2
+
+    rr = RD._update({RD.trigger_msg})
+
+    self.assertEqual(len(rr.points), 1)
+    self.assertEqual(rr.points[0].dRel, 9.0)
+    self.assertAlmostEqual(rr.points[0].yRel, -1.2)
+    self.assertAlmostEqual(rr.points[0].vRel, 0.2)
