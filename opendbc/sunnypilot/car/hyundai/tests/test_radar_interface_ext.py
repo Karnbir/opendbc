@@ -149,20 +149,20 @@ class TestRadarInterfaceExt(unittest.TestCase):
     assert MRR30_CAN_RADAR_ADDR + ((MRR30_CAN_RADAR_TRACK_COUNT - 1) * MRR30_CAN_RADAR_GROUP_SIZE) == 0x253
 
   @parameterized("car_name", [CAR.HYUNDAI_ELANTRA_HEV_2021])
-  def test_mrr30_can_radar_tracks_not_auto_enabled(self, car_name):
-    """Elantra HEV MRR30_CAN tracks require an explicit full-radar request."""
+  def test_mrr30_can_radar_tracks_auto_enabled(self, car_name):
+    """Elantra HEV MRR30_CAN full radar is hardcoded because no device toggle exists."""
     CarInterface = interfaces[car_name]
     CP = CarInterface.get_non_essential_params(car_name)
     CP_SP = CarInterface.get_non_essential_params_sp(CP, car_name)
 
     setup_interfaces(CarInterface, CP, CP_SP, [{"HyundaiRadar": RadarType.OFF}], None, None)
 
-    assert CP_SP.flags & HyundaiFlagsSP.RADAR_OFF
-    assert not CP_SP.flags & HyundaiFlagsSP.RADAR_FULL_RADAR
+    assert CP_SP.flags & HyundaiFlagsSP.RADAR_FULL_RADAR
+    assert not CP_SP.flags & HyundaiFlagsSP.RADAR_OFF
 
   @parameterized("car_name", [CAR.HYUNDAI_ELANTRA_HEV_2021])
   def test_mrr30_can_explicit_full_radar_allowed_with_alpha_long(self, car_name):
-    """Explicit full-radar mode is allowed for alpha-long validation, but not auto-enabled."""
+    """Full-radar mode is available with alpha-long for this route-proven parser."""
     CarInterface = interfaces[car_name]
     CP = CarInterface.get_non_essential_params(car_name)
     CP.openpilotLongitudinalControl = True
