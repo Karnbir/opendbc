@@ -15,22 +15,16 @@ MRR30_CAN_RADAR_COUNT = 0x256 - MRR30_CAN_RADAR_ADDR
 MRR30_CAN_RADAR_TRACK_COUNT = 10
 MRR30_CAN_RADAR_GROUP_SIZE = 3
 MRR30_CAN_RADAR_TRACK_END = MRR30_CAN_RADAR_ADDR + (MRR30_CAN_RADAR_TRACK_COUNT * MRR30_CAN_RADAR_GROUP_SIZE)
-MRR30_CAN_SELECTED_LEAD_ADDR = 0x5ed
-# Other 0x23x groups are decoded for Cabana, but their validity/status fields
-# are not proven well enough to publish to longitudinal control.
-MRR30_CAN_PUBLISHED_TRACKS = (MRR30_CAN_RADAR_ADDR,)
-MRR30_CAN_RADAR_SIGNATURE = (0x238, 0x239, 0x23a, 0x255, MRR30_CAN_SELECTED_LEAD_ADDR)
+MRR30_CAN_RADAR_SIGNATURE = (0x238, 0x239, 0x23a, 0x255)
 
 # POC for parsing corner radars: https://github.com/commaai/openpilot/pull/24221/
 
 
-def get_radar_can_parser(CP, radar_addr=RADAR_START_ADDR, radar_count=RADAR_MSG_COUNT, extra_messages=None):
+def get_radar_can_parser(CP, radar_addr=RADAR_START_ADDR, radar_count=RADAR_MSG_COUNT):
   if Bus.radar not in DBC[CP.carFingerprint]:
     return None
 
-  extra_messages = extra_messages or []
   messages = [(f"RADAR_TRACK_{addr:x}", 50) for addr in range(radar_addr, radar_addr + radar_count)]
-  messages.extend(extra_messages)
   return CANParser(DBC[CP.carFingerprint][Bus.radar], messages, 1)
 
 
@@ -49,10 +43,7 @@ class RadarInterface(RadarInterfaceBase, RadarInterfaceExt):
     self.track_id = 0
 
     self.radar_off_can = CP.radarUnavailable
-    extra_messages = []
-    if self.CP_flags & HyundaiFlags.MRR30_CAN_RADAR and CP.carFingerprint == CAR.HYUNDAI_ELANTRA_HEV_2021:
-      extra_messages.append(("MRR30_CAN_SELECTED_LEAD", 20))
-    self.rcp = get_radar_can_parser(CP, self.radar_addr, self.radar_count, extra_messages)
+    self.rcp = get_radar_can_parser(CP, self.radar_addr, self.radar_count)
 
     if self.rcp is None:
       self.initialize_radar_ext(self.trigger_msg)
@@ -114,9 +105,9 @@ class RadarInterface(RadarInterfaceBase, RadarInterfaceExt):
       ret.points = []
       return ret
 
-    selected_lead_msg = self.rcp.vl["MRR30_CAN_SELECTED_LEAD"]
-    for addr in MRR30_CAN_PUBLISHED_TRACKS:
+    for addr in range(MRR30_CAN_RADAR_ADDR, MRR30_CAN_RADAR_TRACK_END, MRR30_CAN_RADAR_GROUP_SIZE):
       msg = self.rcp.vl[f"RADAR_TRACK_{addr:x}"]
+      rel_speed_msg = self.rcp.vl[f"RADAR_TRACK_{addr + 1:x}"]
       if msg['STATE'] == 2 and msg['LONG_DIST'] > 0:
         if addr not in self.pts:
           self.pts[addr] = structs.RadarData.RadarPoint()
@@ -126,7 +117,7 @@ class RadarInterface(RadarInterfaceBase, RadarInterfaceExt):
         self.pts[addr].measured = True
         self.pts[addr].dRel = msg['LONG_DIST']
         self.pts[addr].yRel = msg['LAT_DIST']
-        self.pts[addr].vRel = selected_lead_msg['SELECTED_REL_SPEED']
+        self.pts[addr].vRel = rel_speed_msg['REL_SPEED']
         self.pts[addr].aRel = float('nan')
         self.pts[addr].yvRel = float('nan')
       else:

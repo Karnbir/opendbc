@@ -2,7 +2,6 @@
 
 
 REL_SPEED_FACTOR = 0.016
-SELECTED_REL_SPEED_FACTOR = 0.1
 
 
 def generate():
@@ -71,12 +70,5 @@ BO_ {addr + 2} RADAR_TRACK_{addr + 2:x}: 8 RADAR
  SG_ UNKNOWN_4 : 54|4@1+ (1,0) [0|15] "" XXX
  SG_ UNKNOWN_5 : 63|6@0+ (1,0) [0|63] "" XXX
     """)
-
-  # 0x5ed tracks the SCC-selected lead. SELECTED_REL_SPEED is cross-checked
-  # against stock SCC ACC_ObjRelSpd; distance/status fields are not proven yet.
-  parts.append(f"""
-BO_ 1517 MRR30_CAN_SELECTED_LEAD: 8 RADAR
- SG_ SELECTED_REL_SPEED : 19|8@1- ({SELECTED_REL_SPEED_FACTOR},0) [-12.8|12.7] "m/s" XXX
-  """)
 
   return {"hyundai_mrr30_can_radar.dbc": "".join(parts)}

@@ -5,8 +5,8 @@ from opendbc.testing import parameterized
 
 from opendbc.car import CanData
 from opendbc.car.car_helpers import interfaces
-from opendbc.car.hyundai.radar_interface import MRR30_CAN_PUBLISHED_TRACKS, MRR30_CAN_RADAR_ADDR, MRR30_CAN_RADAR_COUNT, \
-                                                 MRR30_CAN_RADAR_GROUP_SIZE, MRR30_CAN_RADAR_TRACK_COUNT, MRR30_CAN_RADAR_TRACK_END
+from opendbc.car.hyundai.radar_interface import MRR30_CAN_RADAR_ADDR, MRR30_CAN_RADAR_COUNT, MRR30_CAN_RADAR_GROUP_SIZE, \
+                                                 MRR30_CAN_RADAR_TRACK_COUNT, MRR30_CAN_RADAR_TRACK_END
 from opendbc.car.hyundai.values import CAR, HyundaiFlags
 from opendbc.sunnypilot.car.interfaces import setup_interfaces
 from opendbc.sunnypilot.car.hyundai.escc import ESCC_MSG
@@ -154,8 +154,8 @@ class TestRadarInterfaceExt(unittest.TestCase):
     self.assertTrue(CP_SP.flags & HyundaiFlagsSP.RADAR_FULL_RADAR)
 
   @parameterized("car_name", [CAR.HYUNDAI_ELANTRA_HEV_2021])
-  def test_mrr30_can_selected_group_uses_selected_lead_speed(self, car_name):
-    """MRR30_CAN publishes only the route-proven selected lead track."""
+  def test_mrr30_can_full_radar_publishes_valid_track_groups(self, car_name):
+    """MRR30_CAN publishes all valid route-proven track groups with per-group vRel."""
     CarInterface = interfaces[car_name]
     CP = CarInterface.get_non_essential_params(car_name)
     CP.radarUnavailable = False
@@ -167,27 +167,32 @@ class TestRadarInterfaceExt(unittest.TestCase):
 
     CI = CarInterface(CP, CP_SP)
     RD = CI.RadarInterface(CP, CP_SP)
-    self.assertEqual(MRR30_CAN_PUBLISHED_TRACKS, (MRR30_CAN_RADAR_ADDR,))
 
     msg = RD.rcp.vl["RADAR_TRACK_238"]
     msg["STATE"] = 2
     msg["LONG_DIST"] = 42.0
     msg["LAT_DIST"] = -1.5
-    RD.rcp.vl["MRR30_CAN_SELECTED_LEAD"]["SELECTED_REL_SPEED"] = -2.0
+    RD.rcp.vl["RADAR_TRACK_239"]["REL_SPEED"] = -2.0
 
-    unproven_msg = RD.rcp.vl["RADAR_TRACK_253"]
-    unproven_msg["STATE"] = 2
-    unproven_msg["LONG_DIST"] = 10.0
-    unproven_msg["LAT_DIST"] = 0.0
+    tenth_msg = RD.rcp.vl["RADAR_TRACK_253"]
+    tenth_msg["STATE"] = 2
+    tenth_msg["LONG_DIST"] = 10.0
+    tenth_msg["LAT_DIST"] = 0.5
     RD.rcp.vl["RADAR_TRACK_254"]["REL_SPEED"] = -8.0
 
     rr = RD._update({RD.trigger_msg})
 
-    self.assertEqual(len(rr.points), 1)
-    pt = rr.points[0]
-    self.assertEqual(pt.dRel, 42.0)
-    self.assertEqual(pt.yRel, -1.5)
-    self.assertEqual(pt.vRel, -2.0)
-    self.assertTrue(pt.measured)
-    self.assertTrue(math.isnan(pt.aRel))
-    self.assertTrue(math.isnan(pt.yvRel))
+    self.assertEqual(len(rr.points), 2)
+    pts = {pt.dRel: pt for pt in rr.points}
+
+    self.assertEqual(pts[42.0].yRel, -1.5)
+    self.assertEqual(pts[42.0].vRel, -2.0)
+    self.assertTrue(pts[42.0].measured)
+    self.assertTrue(math.isnan(pts[42.0].aRel))
+    self.assertTrue(math.isnan(pts[42.0].yvRel))
+
+    self.assertEqual(pts[10.0].yRel, 0.5)
+    self.assertEqual(pts[10.0].vRel, -8.0)
+    self.assertTrue(pts[10.0].measured)
+    self.assertTrue(math.isnan(pts[10.0].aRel))
+    self.assertTrue(math.isnan(pts[10.0].yvRel))
