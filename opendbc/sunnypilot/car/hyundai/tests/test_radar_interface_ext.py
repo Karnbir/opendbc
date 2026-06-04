@@ -6,6 +6,7 @@ from opendbc.testing import parameterized
 from opendbc.car import CanData
 from opendbc.car.car_helpers import interfaces
 from opendbc.car.hyundai.radar_interface import MRR30_CAN_RADAR_ADDR, MRR30_CAN_RADAR_COUNT, MRR30_CAN_RADAR_GROUP_SIZE, \
+                                                 MRR30_CAN_RADAR_LAT_DIST_OFFSET, MRR30_CAN_RADAR_LONG_DIST_OFFSET, \
                                                  MRR30_CAN_RADAR_TRACK_COUNT, MRR30_CAN_RADAR_TRACK_END
 from opendbc.car.hyundai.values import CAR, HyundaiFlags
 from opendbc.sunnypilot.car.interfaces import setup_interfaces
@@ -155,7 +156,7 @@ class TestRadarInterfaceExt(unittest.TestCase):
 
   @parameterized("car_name", [CAR.HYUNDAI_ELANTRA_HEV_2021])
   def test_mrr30_can_full_radar_publishes_valid_track_groups(self, car_name):
-    """MRR30_CAN publishes all valid route-proven track groups with per-group vRel."""
+    """MRR30_CAN publishes route-proven track groups in radard coordinates."""
     CarInterface = interfaces[car_name]
     CP = CarInterface.get_non_essential_params(car_name)
     CP.radarUnavailable = False
@@ -180,19 +181,29 @@ class TestRadarInterfaceExt(unittest.TestCase):
     tenth_msg["LAT_DIST"] = 0.5
     RD.rcp.vl["RADAR_TRACK_254"]["REL_SPEED"] = -8.0
 
+    zero_dist_msg = RD.rcp.vl["RADAR_TRACK_23b"]
+    zero_dist_msg["STATE"] = 2
+    zero_dist_msg["LONG_DIST"] = 0.0
+    zero_dist_msg["LAT_DIST"] = -1.2
+
     rr = RD._update({RD.trigger_msg})
 
     self.assertEqual(len(rr.points), 2)
     pts = {pt.dRel: pt for pt in rr.points}
 
-    self.assertEqual(pts[42.0].yRel, -1.5)
-    self.assertEqual(pts[42.0].vRel, -2.0)
-    self.assertTrue(pts[42.0].measured)
-    self.assertTrue(math.isnan(pts[42.0].aRel))
-    self.assertTrue(math.isnan(pts[42.0].yvRel))
+    first_d = 42.0 + MRR30_CAN_RADAR_LONG_DIST_OFFSET
+    first_y = -1.5 + MRR30_CAN_RADAR_LAT_DIST_OFFSET
+    tenth_d = 10.0 + MRR30_CAN_RADAR_LONG_DIST_OFFSET
+    tenth_y = 0.5 + MRR30_CAN_RADAR_LAT_DIST_OFFSET
 
-    self.assertEqual(pts[10.0].yRel, 0.5)
-    self.assertEqual(pts[10.0].vRel, -8.0)
-    self.assertTrue(pts[10.0].measured)
-    self.assertTrue(math.isnan(pts[10.0].aRel))
-    self.assertTrue(math.isnan(pts[10.0].yvRel))
+    self.assertAlmostEqual(pts[first_d].yRel, first_y)
+    self.assertEqual(pts[first_d].vRel, -2.0)
+    self.assertTrue(pts[first_d].measured)
+    self.assertTrue(math.isnan(pts[first_d].aRel))
+    self.assertTrue(math.isnan(pts[first_d].yvRel))
+
+    self.assertAlmostEqual(pts[tenth_d].yRel, tenth_y)
+    self.assertEqual(pts[tenth_d].vRel, -8.0)
+    self.assertTrue(pts[tenth_d].measured)
+    self.assertTrue(math.isnan(pts[tenth_d].aRel))
+    self.assertTrue(math.isnan(pts[tenth_d].yvRel))

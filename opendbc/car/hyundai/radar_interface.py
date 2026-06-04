@@ -16,6 +16,8 @@ MRR30_CAN_RADAR_TRACK_COUNT = 10
 MRR30_CAN_RADAR_GROUP_SIZE = 3
 MRR30_CAN_RADAR_TRACK_END = MRR30_CAN_RADAR_ADDR + (MRR30_CAN_RADAR_TRACK_COUNT * MRR30_CAN_RADAR_GROUP_SIZE)
 MRR30_CAN_RADAR_SIGNATURE = (0x238, 0x239, 0x23a, 0x255)
+MRR30_CAN_RADAR_LONG_DIST_OFFSET = 3.0
+MRR30_CAN_RADAR_LAT_DIST_OFFSET = 1.2
 
 # POC for parsing corner radars: https://github.com/commaai/openpilot/pull/24221/
 
@@ -115,8 +117,8 @@ class RadarInterface(RadarInterfaceBase, RadarInterfaceExt):
           self.track_id += 1
 
         self.pts[addr].measured = True
-        self.pts[addr].dRel = msg['LONG_DIST']
-        self.pts[addr].yRel = msg['LAT_DIST']
+        self.pts[addr].dRel = msg['LONG_DIST'] + MRR30_CAN_RADAR_LONG_DIST_OFFSET
+        self.pts[addr].yRel = msg['LAT_DIST'] + MRR30_CAN_RADAR_LAT_DIST_OFFSET
         self.pts[addr].vRel = rel_speed_msg['REL_SPEED']
         self.pts[addr].aRel = float('nan')
         self.pts[addr].yvRel = float('nan')

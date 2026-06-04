@@ -46,7 +46,9 @@ BU_: XXX
     """)
 
   # MRR30_CAN emits one radar track across three 8-byte messages. The route-proven
-  # track groups are 0x238-0x255.
+  # track groups are 0x238-0x255. LONG_DIST/LAT_DIST are raw radar coordinates;
+  # Elantra HEV applies the validated frame offset in the parser before publishing
+  # RadarPoint values.
   # REL_SPEED is route-derived from stock-SCC logs and still leaves acceleration
   # and lateral velocity unconfirmed.
   for addr in range(0x238, 0x256, 3):
