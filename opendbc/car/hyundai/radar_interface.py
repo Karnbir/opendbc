@@ -20,9 +20,13 @@ MRR30_CAN_RADAR_SIGNATURE = (0x238, 0x239, 0x23a, 0x255)
 MRR30_CAN_RADAR_SELECTED_ADDR = 0x5ED
 MRR30_CAN_RADAR_LONG_DIST_OFFSET = 3.0
 MRR30_CAN_RADAR_LAT_DIST_OFFSET = 1.2
+MRR30_CAN_RADAR_SELECTED_MAX_DISTANCE = 49.0
 MRR30_CAN_RADAR_SELECTED_DISTANCE_TOLERANCE = 3.0
 MRR30_CAN_RADAR_SELECTED_LATERAL_TOLERANCE = 3.0
 MRR30_CAN_RADAR_SELECTED_INCREASE_HISTORY = 50
+MRR30_CAN_RADAR_SELECTED_UPDATE_DT = 0.05
+MRR30_CAN_RADAR_SELECTED_VREL_ALPHA = 0.5
+MRR30_CAN_RADAR_SELECTED_VREL_MAX = 4.0
 MRR30_CAN_RADAR_TAKEOFF_DISTANCE_DELTA = 1.0
 MRR30_CAN_RADAR_TAKEOFF_NEGATIVE_VREL = -0.2
 
@@ -53,6 +57,8 @@ class RadarInterface(RadarInterfaceBase, RadarInterfaceExt):
     self.trigger_msg = self.radar_addr + self.radar_count - 1
     self.track_id = 0
     self.mrr30_can_selected_d_history = deque(maxlen=MRR30_CAN_RADAR_SELECTED_INCREASE_HISTORY)
+    self.mrr30_can_selected_prev_d = math.nan
+    self.mrr30_can_selected_v_rel = 0.0
 
     self.radar_off_can = CP.radarUnavailable
     selected_addr = MRR30_CAN_RADAR_SELECTED_ADDR if self.CP_flags & HyundaiFlags.MRR30_CAN_RADAR and CP.carFingerprint == CAR.HYUNDAI_ELANTRA_HEV_2021 else None
@@ -88,7 +94,7 @@ class RadarInterface(RadarInterfaceBase, RadarInterfaceExt):
       return self.update_ext(ret)
 
     if self.CP_flags & HyundaiFlags.MRR30_CAN_RADAR and self.CP.carFingerprint == CAR.HYUNDAI_ELANTRA_HEV_2021:
-      return self._update_mrr30_can(ret)
+      return self._update_mrr30_can(ret, updated_messages)
 
     for addr in range(self.radar_addr, self.radar_addr + self.radar_count):
       msg = self.rcp.vl[f"RADAR_TRACK_{addr:x}"]
@@ -113,21 +119,40 @@ class RadarInterface(RadarInterfaceBase, RadarInterfaceExt):
     ret.points = list(self.pts.values())
     return ret
 
-  def _update_mrr30_can(self, ret):
+  def _update_mrr30_can_selected_v_rel(self, selected_d_rel, selected_valid, selected_updated):
+    if not selected_valid:
+      self.mrr30_can_selected_prev_d = math.nan
+      self.mrr30_can_selected_v_rel = 0.0
+      return self.mrr30_can_selected_v_rel
+
+    if not selected_updated:
+      return self.mrr30_can_selected_v_rel
+
+    if math.isfinite(self.mrr30_can_selected_prev_d):
+      v_rel = (selected_d_rel - self.mrr30_can_selected_prev_d) / MRR30_CAN_RADAR_SELECTED_UPDATE_DT
+      v_rel = max(-MRR30_CAN_RADAR_SELECTED_VREL_MAX, min(MRR30_CAN_RADAR_SELECTED_VREL_MAX, v_rel))
+      self.mrr30_can_selected_v_rel += MRR30_CAN_RADAR_SELECTED_VREL_ALPHA * (v_rel - self.mrr30_can_selected_v_rel)
+
+    self.mrr30_can_selected_prev_d = selected_d_rel
+    return self.mrr30_can_selected_v_rel
+
+  def _update_mrr30_can(self, ret, updated_messages):
     if not self.CP_SP.flags & HyundaiFlagsSP.RADAR_FULL_RADAR:
       ret.points = []
       return ret
 
     selected_msg = self.rcp.vl[f"RADAR_SELECTED_{MRR30_CAN_RADAR_SELECTED_ADDR:x}"]
     selected_d_rel = selected_msg["SELECTED_LONG_DIST"]
-    selected_v_rel = selected_msg["SELECTED_REL_SPEED"]
-    selected_valid = selected_d_rel > 0.5
+    selected_v_rel_raw = selected_msg["SELECTED_REL_SPEED"]
+    selected_valid = 0.5 < selected_d_rel < MRR30_CAN_RADAR_SELECTED_MAX_DISTANCE
+    selected_updated = MRR30_CAN_RADAR_SELECTED_ADDR in updated_messages
     selected_inconsistent_takeoff = (
-      selected_valid and selected_v_rel < MRR30_CAN_RADAR_TAKEOFF_NEGATIVE_VREL and
+      selected_valid and selected_v_rel_raw < MRR30_CAN_RADAR_TAKEOFF_NEGATIVE_VREL and
       len(self.mrr30_can_selected_d_history) and
       selected_d_rel - min(self.mrr30_can_selected_d_history) > MRR30_CAN_RADAR_TAKEOFF_DISTANCE_DELTA
     )
-    if selected_valid:
+    selected_v_rel = self._update_mrr30_can_selected_v_rel(selected_d_rel, selected_valid, selected_updated)
+    if selected_valid and selected_updated:
       self.mrr30_can_selected_d_history.append(selected_d_rel)
 
     best_msg = None
