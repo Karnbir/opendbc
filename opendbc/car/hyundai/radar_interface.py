@@ -1,4 +1,5 @@
 import math
+from collections import deque
 
 from opendbc.can import CANParser
 from opendbc.car import Bus, structs
@@ -20,6 +21,10 @@ MRR30_CAN_RADAR_SELECTED_ADDR = 0x5ED
 MRR30_CAN_RADAR_LONG_DIST_OFFSET = 3.0
 MRR30_CAN_RADAR_LAT_DIST_OFFSET = 1.2
 MRR30_CAN_RADAR_SELECTED_DISTANCE_TOLERANCE = 3.0
+MRR30_CAN_RADAR_SELECTED_LATERAL_TOLERANCE = 3.0
+MRR30_CAN_RADAR_SELECTED_INCREASE_HISTORY = 50
+MRR30_CAN_RADAR_TAKEOFF_DISTANCE_DELTA = 1.0
+MRR30_CAN_RADAR_TAKEOFF_NEGATIVE_VREL = -0.2
 
 # POC for parsing corner radars: https://github.com/commaai/openpilot/pull/24221/
 
@@ -47,6 +52,7 @@ class RadarInterface(RadarInterfaceBase, RadarInterfaceExt):
     self.updated_messages = set()
     self.trigger_msg = self.radar_addr + self.radar_count - 1
     self.track_id = 0
+    self.mrr30_can_selected_d_history = deque(maxlen=MRR30_CAN_RADAR_SELECTED_INCREASE_HISTORY)
 
     self.radar_off_can = CP.radarUnavailable
     selected_addr = MRR30_CAN_RADAR_SELECTED_ADDR if self.CP_flags & HyundaiFlags.MRR30_CAN_RADAR and CP.carFingerprint == CAR.HYUNDAI_ELANTRA_HEV_2021 else None
@@ -116,25 +122,41 @@ class RadarInterface(RadarInterfaceBase, RadarInterfaceExt):
     selected_d_rel = selected_msg["SELECTED_LONG_DIST"]
     selected_v_rel = selected_msg["SELECTED_REL_SPEED"]
     selected_valid = selected_d_rel > 0.5
+    selected_inconsistent_takeoff = (
+      selected_valid and selected_v_rel < MRR30_CAN_RADAR_TAKEOFF_NEGATIVE_VREL and
+      len(self.mrr30_can_selected_d_history) and
+      selected_d_rel - min(self.mrr30_can_selected_d_history) > MRR30_CAN_RADAR_TAKEOFF_DISTANCE_DELTA
+    )
+    if selected_valid:
+      self.mrr30_can_selected_d_history.append(selected_d_rel)
 
+    best_msg = None
+    best_diff = math.inf
     for addr in range(MRR30_CAN_RADAR_ADDR, MRR30_CAN_RADAR_TRACK_END, MRR30_CAN_RADAR_GROUP_SIZE):
       msg = self.rcp.vl[f"RADAR_TRACK_{addr:x}"]
       d_rel = msg['LONG_DIST'] + MRR30_CAN_RADAR_LONG_DIST_OFFSET
-      selected_match = selected_valid and abs(d_rel - selected_d_rel) <= MRR30_CAN_RADAR_SELECTED_DISTANCE_TOLERANCE
+      y_rel = msg['LAT_DIST'] + MRR30_CAN_RADAR_LAT_DIST_OFFSET
+      selected_diff = abs(d_rel - selected_d_rel)
+      selected_match = (
+        selected_valid and not selected_inconsistent_takeoff and
+        selected_diff <= MRR30_CAN_RADAR_SELECTED_DISTANCE_TOLERANCE and
+        abs(y_rel) <= MRR30_CAN_RADAR_SELECTED_LATERAL_TOLERANCE
+      )
       if msg['STATE'] == 2 and msg['LONG_DIST'] > 0 and selected_match:
-        if addr not in self.pts:
-          self.pts[addr] = structs.RadarData.RadarPoint()
-          self.pts[addr].trackId = self.track_id
-          self.track_id += 1
+        if selected_diff < best_diff:
+          best_msg = msg
+          best_diff = selected_diff
 
-        self.pts[addr].measured = True
-        self.pts[addr].dRel = d_rel
-        self.pts[addr].yRel = msg['LAT_DIST'] + MRR30_CAN_RADAR_LAT_DIST_OFFSET
-        self.pts[addr].vRel = selected_v_rel
-        self.pts[addr].aRel = float('nan')
-        self.pts[addr].yvRel = float('nan')
-      else:
-        self.pts.pop(addr, None)
+    self.pts.clear()
+    if best_msg is not None:
+      self.pts[MRR30_CAN_RADAR_SELECTED_ADDR] = structs.RadarData.RadarPoint()
+      self.pts[MRR30_CAN_RADAR_SELECTED_ADDR].trackId = 0
+      self.pts[MRR30_CAN_RADAR_SELECTED_ADDR].measured = True
+      self.pts[MRR30_CAN_RADAR_SELECTED_ADDR].dRel = selected_d_rel
+      self.pts[MRR30_CAN_RADAR_SELECTED_ADDR].yRel = best_msg['LAT_DIST'] + MRR30_CAN_RADAR_LAT_DIST_OFFSET
+      self.pts[MRR30_CAN_RADAR_SELECTED_ADDR].vRel = selected_v_rel
+      self.pts[MRR30_CAN_RADAR_SELECTED_ADDR].aRel = float('nan')
+      self.pts[MRR30_CAN_RADAR_SELECTED_ADDR].yvRel = float('nan')
 
     ret.points = list(self.pts.values())
     return ret

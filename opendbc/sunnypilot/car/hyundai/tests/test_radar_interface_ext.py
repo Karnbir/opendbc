@@ -8,6 +8,8 @@ from opendbc.car.car_helpers import interfaces
 from opendbc.car.hyundai.radar_interface import MRR30_CAN_RADAR_ADDR, MRR30_CAN_RADAR_COUNT, MRR30_CAN_RADAR_GROUP_SIZE, \
                                                  MRR30_CAN_RADAR_LAT_DIST_OFFSET, MRR30_CAN_RADAR_LONG_DIST_OFFSET, \
                                                  MRR30_CAN_RADAR_SELECTED_ADDR, MRR30_CAN_RADAR_SELECTED_DISTANCE_TOLERANCE, \
+                                                 MRR30_CAN_RADAR_SELECTED_LATERAL_TOLERANCE, \
+                                                 MRR30_CAN_RADAR_TAKEOFF_DISTANCE_DELTA, \
                                                  MRR30_CAN_RADAR_TRACK_COUNT, MRR30_CAN_RADAR_TRACK_END
 from opendbc.car.hyundai.values import CAR, HyundaiFlags
 from opendbc.sunnypilot.car.interfaces import setup_interfaces
@@ -227,3 +229,107 @@ class TestRadarInterfaceExt(unittest.TestCase):
     rr = RD._update({RD.trigger_msg})
 
     self.assertEqual(len(rr.points), 0)
+
+  @parameterized("car_name", [CAR.HYUNDAI_ELANTRA_HEV_2021])
+  def test_mrr30_can_full_radar_publishes_single_selected_lead(self, car_name):
+    """MRR30_CAN collapses matching raw tracks to one selected radar lead."""
+    CarInterface = interfaces[car_name]
+    CP = CarInterface.get_non_essential_params(car_name)
+    CP.radarUnavailable = False
+    CP_SP = CarInterface.get_non_essential_params_sp(CP, car_name)
+
+    setup_interfaces(CarInterface, CP, CP_SP, [], None, None)
+
+    CI = CarInterface(CP, CP_SP)
+    RD = CI.RadarInterface(CP, CP_SP)
+
+    selected_msg = RD.rcp.vl[f"RADAR_SELECTED_{MRR30_CAN_RADAR_SELECTED_ADDR:x}"]
+    selected_msg["SELECTED_LONG_DIST"] = 25.0
+    selected_msg["SELECTED_REL_SPEED"] = -0.25
+
+    farther_msg = RD.rcp.vl["RADAR_TRACK_238"]
+    farther_msg["STATE"] = 2
+    farther_msg["LONG_DIST"] = 21.0
+    farther_msg["LAT_DIST"] = -2.0
+
+    closer_msg = RD.rcp.vl["RADAR_TRACK_23b"]
+    closer_msg["STATE"] = 2
+    closer_msg["LONG_DIST"] = 22.0
+    closer_msg["LAT_DIST"] = 0.4
+
+    rr = RD._update({RD.trigger_msg})
+
+    self.assertEqual(len(rr.points), 1)
+    self.assertEqual(rr.points[0].trackId, 0)
+    self.assertAlmostEqual(rr.points[0].dRel, selected_msg["SELECTED_LONG_DIST"])
+    self.assertAlmostEqual(rr.points[0].yRel, closer_msg["LAT_DIST"] + MRR30_CAN_RADAR_LAT_DIST_OFFSET)
+    self.assertEqual(rr.points[0].vRel, selected_msg["SELECTED_REL_SPEED"])
+
+  @parameterized("car_name", [CAR.HYUNDAI_ELANTRA_HEV_2021])
+  def test_mrr30_can_full_radar_rejects_side_match(self, car_name):
+    """MRR30_CAN does not anchor the selected lead to a side raw return."""
+    CarInterface = interfaces[car_name]
+    CP = CarInterface.get_non_essential_params(car_name)
+    CP.radarUnavailable = False
+    CP_SP = CarInterface.get_non_essential_params_sp(CP, car_name)
+
+    setup_interfaces(CarInterface, CP, CP_SP, [], None, None)
+
+    CI = CarInterface(CP, CP_SP)
+    RD = CI.RadarInterface(CP, CP_SP)
+
+    selected_msg = RD.rcp.vl[f"RADAR_SELECTED_{MRR30_CAN_RADAR_SELECTED_ADDR:x}"]
+    selected_msg["SELECTED_LONG_DIST"] = 25.0
+    selected_msg["SELECTED_REL_SPEED"] = 0.0
+
+    side_msg = RD.rcp.vl["RADAR_TRACK_238"]
+    side_msg["STATE"] = 2
+    side_msg["LONG_DIST"] = 22.0
+    side_msg["LAT_DIST"] = MRR30_CAN_RADAR_SELECTED_LATERAL_TOLERANCE - MRR30_CAN_RADAR_LAT_DIST_OFFSET + 0.1
+
+    in_lane_msg = RD.rcp.vl["RADAR_TRACK_23b"]
+    in_lane_msg["STATE"] = 2
+    in_lane_msg["LONG_DIST"] = 21.5
+    in_lane_msg["LAT_DIST"] = -MRR30_CAN_RADAR_LAT_DIST_OFFSET
+
+    rr = RD._update({RD.trigger_msg})
+
+    self.assertEqual(len(rr.points), 1)
+    self.assertAlmostEqual(rr.points[0].dRel, selected_msg["SELECTED_LONG_DIST"])
+    self.assertAlmostEqual(rr.points[0].yRel, 0.0)
+
+  @parameterized("car_name", [CAR.HYUNDAI_ELANTRA_HEV_2021])
+  def test_mrr30_can_full_radar_drops_inconsistent_takeoff_lead(self, car_name):
+    """Drop stale selected radar leads when distance opens but vRel still says closing."""
+    CarInterface = interfaces[car_name]
+    CP = CarInterface.get_non_essential_params(car_name)
+    CP.radarUnavailable = False
+    CP_SP = CarInterface.get_non_essential_params_sp(CP, car_name)
+
+    setup_interfaces(CarInterface, CP, CP_SP, [], None, None)
+
+    CI = CarInterface(CP, CP_SP)
+    RD = CI.RadarInterface(CP, CP_SP)
+
+    track_msg = RD.rcp.vl["RADAR_TRACK_238"]
+    track_msg["STATE"] = 2
+    track_msg["LONG_DIST"] = 7.0
+    track_msg["LAT_DIST"] = -1.2
+
+    selected_msg = RD.rcp.vl[f"RADAR_SELECTED_{MRR30_CAN_RADAR_SELECTED_ADDR:x}"]
+    selected_msg["SELECTED_LONG_DIST"] = 10.0
+    selected_msg["SELECTED_REL_SPEED"] = -1.0
+
+    rr = RD._update({RD.trigger_msg})
+    self.assertEqual(len(rr.points), 1)
+
+    track_msg["LONG_DIST"] += MRR30_CAN_RADAR_TAKEOFF_DISTANCE_DELTA + 0.5
+    selected_msg["SELECTED_LONG_DIST"] += MRR30_CAN_RADAR_TAKEOFF_DISTANCE_DELTA + 0.5
+
+    rr = RD._update({RD.trigger_msg})
+    self.assertEqual(len(rr.points), 0)
+
+    selected_msg["SELECTED_REL_SPEED"] = 0.5
+
+    rr = RD._update({RD.trigger_msg})
+    self.assertEqual(len(rr.points), 1)
