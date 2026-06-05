@@ -2,6 +2,8 @@
 
 
 REL_SPEED_FACTOR = 0.016
+SELECTED_DISTANCE_FACTOR = 0.00625
+SELECTED_REL_SPEED_FACTOR = 0.0256
 
 
 def generate():
@@ -48,7 +50,8 @@ BU_: XXX
   # MRR30_CAN emits one radar track across three 8-byte messages. The route-proven
   # track groups are 0x238-0x255. LONG_DIST/LAT_DIST are raw radar coordinates;
   # Elantra HEV applies the validated frame offset in the parser before publishing
-  # RadarPoint values.
+  # RadarPoint values. 0x5ed carries the radar-selected target distance/speed and
+  # matches stock SCC selected lead distance/speed on route data.
   # REL_SPEED is route-derived from stock-SCC logs and still leaves acceleration
   # and lateral velocity unconfirmed.
   for addr in range(0x238, 0x256, 3):
@@ -71,6 +74,12 @@ BO_ {addr + 2} RADAR_TRACK_{addr + 2:x}: 8 RADAR
  SG_ UNKNOWN_3 : 45|7@1+ (1,0) [0|127] "" XXX
  SG_ UNKNOWN_4 : 54|4@1+ (1,0) [0|15] "" XXX
  SG_ UNKNOWN_5 : 63|6@0+ (1,0) [0|63] "" XXX
+    """)
+
+  parts.append(f"""
+BO_ 1517 RADAR_SELECTED_5ed: 8 RADAR
+ SG_ SELECTED_LONG_DIST : 4|13@1+ ({SELECTED_DISTANCE_FACTOR},0) [0|51.19375] "m" XXX
+ SG_ SELECTED_REL_SPEED : 17|8@1- ({SELECTED_REL_SPEED_FACTOR},0.02) [-3.2568|3.2712] "m/s" XXX
     """)
 
   return {"hyundai_mrr30_can_radar.dbc": "".join(parts)}
