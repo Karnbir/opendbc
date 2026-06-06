@@ -16,10 +16,14 @@ MRR30_CAN_RADAR_COUNT = 0x256 - MRR30_CAN_RADAR_ADDR
 MRR30_CAN_RADAR_TRACK_COUNT = 10
 MRR30_CAN_RADAR_GROUP_SIZE = 3
 MRR30_CAN_RADAR_TRACK_END = MRR30_CAN_RADAR_ADDR + (MRR30_CAN_RADAR_TRACK_COUNT * MRR30_CAN_RADAR_GROUP_SIZE)
+MRR30_CAN_RADAR_TRACK_ADDRS = tuple(range(MRR30_CAN_RADAR_ADDR, MRR30_CAN_RADAR_TRACK_END, MRR30_CAN_RADAR_GROUP_SIZE))
 MRR30_CAN_RADAR_SIGNATURE = (0x238, 0x239, 0x23a, 0x255)
 MRR30_CAN_RADAR_SELECTED_ADDR = 0x5ED
+MRR30_CAN_RADAR_SELECTED_MSG = f"RADAR_SELECTED_{MRR30_CAN_RADAR_SELECTED_ADDR:x}"
+MRR30_CAN_RADAR_VALID_STATE = 2
 MRR30_CAN_RADAR_LONG_DIST_OFFSET = 3.0
 MRR30_CAN_RADAR_LAT_DIST_OFFSET = 1.2
+MRR30_CAN_RADAR_SELECTED_MIN_DISTANCE = 0.5
 MRR30_CAN_RADAR_SELECTED_MAX_DISTANCE = 49.0
 MRR30_CAN_RADAR_SELECTED_DISTANCE_TOLERANCE = 3.0
 MRR30_CAN_RADAR_SELECTED_LATERAL_TOLERANCE = 3.0
@@ -31,6 +35,18 @@ MRR30_CAN_RADAR_TAKEOFF_DISTANCE_DELTA = 1.0
 MRR30_CAN_RADAR_TAKEOFF_NEGATIVE_VREL = -0.2
 
 # POC for parsing corner radars: https://github.com/commaai/openpilot/pull/24221/
+
+
+def is_mrr30_can_radar(CP):
+  return CP.carFingerprint == CAR.HYUNDAI_ELANTRA_HEV_2021 and bool(CP.flags & HyundaiFlags.MRR30_CAN_RADAR)
+
+
+def mrr30_can_radar_track_msg_name(addr):
+  return f"RADAR_TRACK_{addr:x}"
+
+
+def mrr30_can_radar_point_from_track(msg):
+  return msg['LONG_DIST'] + MRR30_CAN_RADAR_LONG_DIST_OFFSET, msg['LAT_DIST'] + MRR30_CAN_RADAR_LAT_DIST_OFFSET
 
 
 def get_radar_can_parser(CP, radar_addr=RADAR_START_ADDR, radar_count=RADAR_MSG_COUNT, selected_addr=None):
@@ -48,7 +64,8 @@ class RadarInterface(RadarInterfaceBase, RadarInterfaceExt):
     RadarInterfaceBase.__init__(self, CP, CP_SP)
     RadarInterfaceExt.__init__(self, CP, CP_SP)
     self.CP_flags = CP.flags
-    if self.CP_flags & HyundaiFlags.MRR30_CAN_RADAR and CP.carFingerprint == CAR.HYUNDAI_ELANTRA_HEV_2021:
+    self.mrr30_can_radar = is_mrr30_can_radar(CP)
+    if self.mrr30_can_radar:
       self.radar_addr, self.radar_count = MRR30_CAN_RADAR_ADDR, MRR30_CAN_RADAR_COUNT
     else:
       self.radar_addr, self.radar_count = RADAR_START_ADDR, RADAR_MSG_COUNT
@@ -61,7 +78,7 @@ class RadarInterface(RadarInterfaceBase, RadarInterfaceExt):
     self.mrr30_can_selected_v_rel = 0.0
 
     self.radar_off_can = CP.radarUnavailable
-    selected_addr = MRR30_CAN_RADAR_SELECTED_ADDR if self.CP_flags & HyundaiFlags.MRR30_CAN_RADAR and CP.carFingerprint == CAR.HYUNDAI_ELANTRA_HEV_2021 else None
+    selected_addr = MRR30_CAN_RADAR_SELECTED_ADDR if self.mrr30_can_radar else None
     self.rcp = get_radar_can_parser(CP, self.radar_addr, self.radar_count, selected_addr)
 
     if self.rcp is None:
@@ -93,7 +110,7 @@ class RadarInterface(RadarInterfaceBase, RadarInterfaceExt):
     if self.use_radar_interface_ext:
       return self.update_ext(ret)
 
-    if self.CP_flags & HyundaiFlags.MRR30_CAN_RADAR and self.CP.carFingerprint == CAR.HYUNDAI_ELANTRA_HEV_2021:
+    if self.mrr30_can_radar:
       return self._update_mrr30_can(ret, updated_messages)
 
     for addr in range(self.radar_addr, self.radar_addr + self.radar_count):
@@ -129,6 +146,8 @@ class RadarInterface(RadarInterfaceBase, RadarInterfaceExt):
       return self.mrr30_can_selected_v_rel
 
     if math.isfinite(self.mrr30_can_selected_prev_d):
+      # The selected speed byte is useful as a stale-lead sanity check, but route
+      # data showed better longitudinal stability from the selected distance rate.
       v_rel = (selected_d_rel - self.mrr30_can_selected_prev_d) / MRR30_CAN_RADAR_SELECTED_UPDATE_DT
       v_rel = max(-MRR30_CAN_RADAR_SELECTED_VREL_MAX, min(MRR30_CAN_RADAR_SELECTED_VREL_MAX, v_rel))
       self.mrr30_can_selected_v_rel += MRR30_CAN_RADAR_SELECTED_VREL_ALPHA * (v_rel - self.mrr30_can_selected_v_rel)
@@ -136,52 +155,72 @@ class RadarInterface(RadarInterfaceBase, RadarInterfaceExt):
     self.mrr30_can_selected_prev_d = selected_d_rel
     return self.mrr30_can_selected_v_rel
 
+  def _mrr30_can_selected_valid(self, selected_d_rel):
+    return MRR30_CAN_RADAR_SELECTED_MIN_DISTANCE < selected_d_rel < MRR30_CAN_RADAR_SELECTED_MAX_DISTANCE
+
+  def _mrr30_can_selected_inconsistent_takeoff(self, selected_d_rel, selected_v_rel_raw, selected_valid):
+    if not selected_valid or selected_v_rel_raw >= MRR30_CAN_RADAR_TAKEOFF_NEGATIVE_VREL or not self.mrr30_can_selected_d_history:
+      return False
+    return selected_d_rel - min(self.mrr30_can_selected_d_history) > MRR30_CAN_RADAR_TAKEOFF_DISTANCE_DELTA
+
+  def _mrr30_can_raw_track_valid(self, msg):
+    return msg['STATE'] == MRR30_CAN_RADAR_VALID_STATE and msg['LONG_DIST'] > 0
+
+  def _mrr30_can_matching_selected_track(self, selected_d_rel, selected_valid, selected_inconsistent_takeoff):
+    if not selected_valid or selected_inconsistent_takeoff:
+      return None
+
+    best_msg = None
+    best_diff = math.inf
+    for addr in MRR30_CAN_RADAR_TRACK_ADDRS:
+      msg = self.rcp.vl[mrr30_can_radar_track_msg_name(addr)]
+      if not self._mrr30_can_raw_track_valid(msg):
+        continue
+
+      d_rel, y_rel = mrr30_can_radar_point_from_track(msg)
+      selected_diff = abs(d_rel - selected_d_rel)
+      if selected_diff > MRR30_CAN_RADAR_SELECTED_DISTANCE_TOLERANCE or abs(y_rel) > MRR30_CAN_RADAR_SELECTED_LATERAL_TOLERANCE:
+        continue
+
+      if selected_diff < best_diff:
+        best_msg = msg
+        best_diff = selected_diff
+
+    return best_msg
+
+  def _mrr30_can_publish_selected_point(self, selected_d_rel, track_msg, selected_v_rel):
+    point = structs.RadarData.RadarPoint()
+    point.trackId = 0
+    point.measured = True
+    point.dRel = selected_d_rel
+    _, point.yRel = mrr30_can_radar_point_from_track(track_msg)
+    point.vRel = selected_v_rel
+    point.aRel = float('nan')
+    point.yvRel = float('nan')
+    self.pts[MRR30_CAN_RADAR_SELECTED_ADDR] = point
+
   def _update_mrr30_can(self, ret, updated_messages):
-    if not self.CP_SP.flags & HyundaiFlagsSP.RADAR_FULL_RADAR:
+    if not (self.CP_SP.flags & HyundaiFlagsSP.RADAR_FULL_RADAR):
       ret.points = []
       return ret
 
-    selected_msg = self.rcp.vl[f"RADAR_SELECTED_{MRR30_CAN_RADAR_SELECTED_ADDR:x}"]
+    selected_msg = self.rcp.vl[MRR30_CAN_RADAR_SELECTED_MSG]
     selected_d_rel = selected_msg["SELECTED_LONG_DIST"]
     selected_v_rel_raw = selected_msg["SELECTED_REL_SPEED"]
-    selected_valid = 0.5 < selected_d_rel < MRR30_CAN_RADAR_SELECTED_MAX_DISTANCE
+    selected_valid = self._mrr30_can_selected_valid(selected_d_rel)
     selected_updated = MRR30_CAN_RADAR_SELECTED_ADDR in updated_messages
-    selected_inconsistent_takeoff = (
-      selected_valid and selected_v_rel_raw < MRR30_CAN_RADAR_TAKEOFF_NEGATIVE_VREL and
-      len(self.mrr30_can_selected_d_history) and
-      selected_d_rel - min(self.mrr30_can_selected_d_history) > MRR30_CAN_RADAR_TAKEOFF_DISTANCE_DELTA
-    )
+    selected_inconsistent_takeoff = self._mrr30_can_selected_inconsistent_takeoff(selected_d_rel, selected_v_rel_raw, selected_valid)
     selected_v_rel = self._update_mrr30_can_selected_v_rel(selected_d_rel, selected_valid, selected_updated)
     if selected_valid and selected_updated:
       self.mrr30_can_selected_d_history.append(selected_d_rel)
 
-    best_msg = None
-    best_diff = math.inf
-    for addr in range(MRR30_CAN_RADAR_ADDR, MRR30_CAN_RADAR_TRACK_END, MRR30_CAN_RADAR_GROUP_SIZE):
-      msg = self.rcp.vl[f"RADAR_TRACK_{addr:x}"]
-      d_rel = msg['LONG_DIST'] + MRR30_CAN_RADAR_LONG_DIST_OFFSET
-      y_rel = msg['LAT_DIST'] + MRR30_CAN_RADAR_LAT_DIST_OFFSET
-      selected_diff = abs(d_rel - selected_d_rel)
-      selected_match = (
-        selected_valid and not selected_inconsistent_takeoff and
-        selected_diff <= MRR30_CAN_RADAR_SELECTED_DISTANCE_TOLERANCE and
-        abs(y_rel) <= MRR30_CAN_RADAR_SELECTED_LATERAL_TOLERANCE
-      )
-      if msg['STATE'] == 2 and msg['LONG_DIST'] > 0 and selected_match:
-        if selected_diff < best_diff:
-          best_msg = msg
-          best_diff = selected_diff
-
+    # 0x23x raw tracks can include side/static returns. 0x5ed is the radar's
+    # selected target, so publish one point only when a route-proven raw track
+    # agrees with that selected target.
+    best_msg = self._mrr30_can_matching_selected_track(selected_d_rel, selected_valid, selected_inconsistent_takeoff)
     self.pts.clear()
     if best_msg is not None:
-      self.pts[MRR30_CAN_RADAR_SELECTED_ADDR] = structs.RadarData.RadarPoint()
-      self.pts[MRR30_CAN_RADAR_SELECTED_ADDR].trackId = 0
-      self.pts[MRR30_CAN_RADAR_SELECTED_ADDR].measured = True
-      self.pts[MRR30_CAN_RADAR_SELECTED_ADDR].dRel = selected_d_rel
-      self.pts[MRR30_CAN_RADAR_SELECTED_ADDR].yRel = best_msg['LAT_DIST'] + MRR30_CAN_RADAR_LAT_DIST_OFFSET
-      self.pts[MRR30_CAN_RADAR_SELECTED_ADDR].vRel = selected_v_rel
-      self.pts[MRR30_CAN_RADAR_SELECTED_ADDR].aRel = float('nan')
-      self.pts[MRR30_CAN_RADAR_SELECTED_ADDR].yvRel = float('nan')
+      self._mrr30_can_publish_selected_point(selected_d_rel, best_msg, selected_v_rel)
 
     ret.points = list(self.pts.values())
     return ret
