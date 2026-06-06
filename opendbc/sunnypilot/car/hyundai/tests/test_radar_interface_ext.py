@@ -6,12 +6,9 @@ from opendbc.testing import parameterized
 from opendbc.car import CanData
 from opendbc.car.car_helpers import interfaces
 from opendbc.car.hyundai.radar_interface import MRR30_CAN_RADAR_ADDR, MRR30_CAN_RADAR_COUNT, MRR30_CAN_RADAR_GROUP_SIZE, \
-                                                 MRR30_CAN_RADAR_LAT_DIST_OFFSET, MRR30_CAN_RADAR_LONG_DIST_OFFSET, \
-                                                 MRR30_CAN_RADAR_SELECTED_ADDR, MRR30_CAN_RADAR_SELECTED_DISTANCE_TOLERANCE, \
+                                                 MRR30_CAN_RADAR_SELECTED_ADDR, MRR30_CAN_RADAR_SELECTED_DISTANCE_BANK_SIZE, \
                                                  MRR30_CAN_RADAR_SELECTED_MAX_DISTANCE, \
-                                                 MRR30_CAN_RADAR_SELECTED_LATERAL_TOLERANCE, \
                                                  MRR30_CAN_RADAR_TAKEOFF_DISTANCE_DELTA, \
-                                                 MRR30_CAN_RADAR_SELECTED_VREL_MAX, \
                                                  MRR30_CAN_RADAR_TRACK_COUNT, MRR30_CAN_RADAR_TRACK_END
 from opendbc.car.hyundai.values import CAR, HyundaiFlags
 from opendbc.sunnypilot.car.interfaces import setup_interfaces
@@ -35,6 +32,12 @@ STANDARD_RADAR_CARS = [
 MRR30_CAN_RADAR_CARS = [
   (CAR.HYUNDAI_ELANTRA_HEV_2021, MRR30_CAN_RADAR_ADDR, MRR30_CAN_RADAR_COUNT),
 ]
+
+
+def set_mrr30_can_selected_distance(selected_msg, distance):
+  bank = int(distance >= MRR30_CAN_RADAR_SELECTED_DISTANCE_BANK_SIZE)
+  selected_msg["SELECTED_LONG_DIST_LOW"] = distance - (bank * MRR30_CAN_RADAR_SELECTED_DISTANCE_BANK_SIZE)
+  selected_msg["SELECTED_LONG_DIST_BANK"] = bank
 
 
 class TestRadarInterfaceExt(unittest.TestCase):
@@ -143,11 +146,12 @@ class TestRadarInterfaceExt(unittest.TestCase):
     self.assertTrue(CP.flags & HyundaiFlags.MRR30_CAN_RADAR)
     self.assertEqual(RD.radar_addr, expected_addr)
     self.assertEqual(RD.radar_count, expected_count)
-    self.assertEqual(RD.trigger_msg, expected_addr + expected_count - 1)
+    self.assertEqual(RD.trigger_msg, MRR30_CAN_RADAR_SELECTED_ADDR)
     self.assertEqual(MRR30_CAN_RADAR_TRACK_COUNT, 10)
     self.assertEqual(MRR30_CAN_RADAR_TRACK_END, 0x256)
     self.assertEqual(MRR30_CAN_RADAR_ADDR + ((MRR30_CAN_RADAR_TRACK_COUNT - 1) * MRR30_CAN_RADAR_GROUP_SIZE), 0x253)
     self.assertIn(f"RADAR_SELECTED_{MRR30_CAN_RADAR_SELECTED_ADDR:x}", RD.rcp.vl)
+    self.assertNotIn("RADAR_TRACK_238", RD.rcp.vl)
 
   @parameterized("car_name", [CAR.HYUNDAI_ELANTRA_HEV_2021])
   def test_mrr30_can_radar_tracks_auto_enabled(self, car_name):
@@ -161,8 +165,8 @@ class TestRadarInterfaceExt(unittest.TestCase):
     self.assertTrue(CP_SP.flags & HyundaiFlagsSP.RADAR_FULL_RADAR)
 
   @parameterized("car_name", [CAR.HYUNDAI_ELANTRA_HEV_2021])
-  def test_mrr30_can_full_radar_publishes_valid_track_groups(self, car_name):
-    """MRR30_CAN publishes only track groups matching the radar-selected lead."""
+  def test_mrr30_can_full_radar_publishes_selected_lead(self, car_name):
+    """MRR30_CAN publishes the route-proven radar-selected lead from 0x5ed."""
     CarInterface = interfaces[car_name]
     CP = CarInterface.get_non_essential_params(car_name)
     CP.radarUnavailable = False
@@ -175,58 +179,22 @@ class TestRadarInterfaceExt(unittest.TestCase):
     CI = CarInterface(CP, CP_SP)
     RD = CI.RadarInterface(CP, CP_SP)
 
-    msg = RD.rcp.vl["RADAR_TRACK_238"]
-    msg["STATE"] = 2
-    msg["LONG_DIST"] = 42.0
-    msg["LAT_DIST"] = -1.5
-    RD.rcp.vl["RADAR_TRACK_239"]["REL_SPEED"] = -2.0
-
-    tenth_msg = RD.rcp.vl["RADAR_TRACK_253"]
-    tenth_msg["STATE"] = 2
-    tenth_msg["LONG_DIST"] = 10.0
-    tenth_msg["LAT_DIST"] = 0.5
-    RD.rcp.vl["RADAR_TRACK_254"]["REL_SPEED"] = -8.0
-
-    zero_dist_msg = RD.rcp.vl["RADAR_TRACK_23b"]
-    zero_dist_msg["STATE"] = 2
-    zero_dist_msg["LONG_DIST"] = 0.0
-    zero_dist_msg["LAT_DIST"] = -1.2
-
     selected_msg = RD.rcp.vl[f"RADAR_SELECTED_{MRR30_CAN_RADAR_SELECTED_ADDR:x}"]
-    selected_msg["SELECTED_LONG_DIST"] = 42.0 + MRR30_CAN_RADAR_LONG_DIST_OFFSET
+    selected_d = 45.0
+    set_mrr30_can_selected_distance(selected_msg, selected_d)
     selected_msg["SELECTED_REL_SPEED"] = -1.25
 
     rr = RD._update({RD.trigger_msg, MRR30_CAN_RADAR_SELECTED_ADDR})
 
     self.assertEqual(len(rr.points), 1)
-    pts = {pt.dRel: pt for pt in rr.points}
+    self.assertAlmostEqual(rr.points[0].dRel, selected_d)
+    self.assertEqual(rr.points[0].yRel, 0.0)
+    self.assertEqual(rr.points[0].vRel, -1.25)
+    self.assertTrue(rr.points[0].measured)
+    self.assertTrue(math.isnan(rr.points[0].aRel))
+    self.assertTrue(math.isnan(rr.points[0].yvRel))
 
-    first_d = 42.0 + MRR30_CAN_RADAR_LONG_DIST_OFFSET
-    first_y = -1.5 + MRR30_CAN_RADAR_LAT_DIST_OFFSET
-    tenth_d = 10.0 + MRR30_CAN_RADAR_LONG_DIST_OFFSET
-    tenth_y = 0.5 + MRR30_CAN_RADAR_LAT_DIST_OFFSET
-
-    self.assertAlmostEqual(pts[first_d].yRel, first_y)
-    self.assertEqual(pts[first_d].vRel, 0.0)
-    self.assertTrue(pts[first_d].measured)
-    self.assertTrue(math.isnan(pts[first_d].aRel))
-    self.assertTrue(math.isnan(pts[first_d].yvRel))
-
-    selected_msg["SELECTED_LONG_DIST"] = tenth_d
-    selected_msg["SELECTED_REL_SPEED"] = -7.5
-
-    rr = RD._update({RD.trigger_msg, MRR30_CAN_RADAR_SELECTED_ADDR})
-
-    self.assertEqual(len(rr.points), 1)
-    pts = {pt.dRel: pt for pt in rr.points}
-
-    self.assertAlmostEqual(pts[tenth_d].yRel, tenth_y)
-    self.assertAlmostEqual(pts[tenth_d].vRel, -MRR30_CAN_RADAR_SELECTED_VREL_MAX / 2.0)
-    self.assertTrue(pts[tenth_d].measured)
-    self.assertTrue(math.isnan(pts[tenth_d].aRel))
-    self.assertTrue(math.isnan(pts[tenth_d].yvRel))
-
-    selected_msg["SELECTED_LONG_DIST"] = first_d + MRR30_CAN_RADAR_SELECTED_DISTANCE_TOLERANCE + 1.0
+    set_mrr30_can_selected_distance(selected_msg, MRR30_CAN_RADAR_SELECTED_MAX_DISTANCE + 1.0)
 
     rr = RD._update({RD.trigger_msg, MRR30_CAN_RADAR_SELECTED_ADDR})
 
@@ -234,7 +202,7 @@ class TestRadarInterfaceExt(unittest.TestCase):
 
   @parameterized("car_name", [CAR.HYUNDAI_ELANTRA_HEV_2021])
   def test_mrr30_can_full_radar_publishes_single_selected_lead(self, car_name):
-    """MRR30_CAN collapses matching raw tracks to one selected radar lead."""
+    """MRR30_CAN publishes one selected radar lead beyond the old 51.2m wrap."""
     CarInterface = interfaces[car_name]
     CP = CarInterface.get_non_essential_params(car_name)
     CP.radarUnavailable = False
@@ -246,30 +214,21 @@ class TestRadarInterfaceExt(unittest.TestCase):
     RD = CI.RadarInterface(CP, CP_SP)
 
     selected_msg = RD.rcp.vl[f"RADAR_SELECTED_{MRR30_CAN_RADAR_SELECTED_ADDR:x}"]
-    selected_msg["SELECTED_LONG_DIST"] = 25.0
+    selected_d = 58.6
+    set_mrr30_can_selected_distance(selected_msg, selected_d)
     selected_msg["SELECTED_REL_SPEED"] = -0.25
-
-    farther_msg = RD.rcp.vl["RADAR_TRACK_238"]
-    farther_msg["STATE"] = 2
-    farther_msg["LONG_DIST"] = 21.0
-    farther_msg["LAT_DIST"] = -2.0
-
-    closer_msg = RD.rcp.vl["RADAR_TRACK_23b"]
-    closer_msg["STATE"] = 2
-    closer_msg["LONG_DIST"] = 22.0
-    closer_msg["LAT_DIST"] = 0.4
 
     rr = RD._update({RD.trigger_msg, MRR30_CAN_RADAR_SELECTED_ADDR})
 
     self.assertEqual(len(rr.points), 1)
     self.assertEqual(rr.points[0].trackId, 0)
-    self.assertAlmostEqual(rr.points[0].dRel, selected_msg["SELECTED_LONG_DIST"])
-    self.assertAlmostEqual(rr.points[0].yRel, closer_msg["LAT_DIST"] + MRR30_CAN_RADAR_LAT_DIST_OFFSET)
-    self.assertEqual(rr.points[0].vRel, 0.0)
+    self.assertAlmostEqual(rr.points[0].dRel, selected_d, places=4)
+    self.assertEqual(rr.points[0].yRel, 0.0)
+    self.assertEqual(rr.points[0].vRel, -0.25)
 
   @parameterized("car_name", [CAR.HYUNDAI_ELANTRA_HEV_2021])
-  def test_mrr30_can_full_radar_uses_selected_distance_rate_for_vrel(self, car_name):
-    """MRR30_CAN lead speed follows selected distance changes, not the noisy selected speed byte."""
+  def test_mrr30_can_full_radar_uses_selected_rel_speed(self, car_name):
+    """MRR30_CAN lead speed follows the decoded selected speed field."""
     CarInterface = interfaces[car_name]
     CP = CarInterface.get_non_essential_params(car_name)
     CP.radarUnavailable = False
@@ -281,30 +240,23 @@ class TestRadarInterfaceExt(unittest.TestCase):
     RD = CI.RadarInterface(CP, CP_SP)
 
     selected_msg = RD.rcp.vl[f"RADAR_SELECTED_{MRR30_CAN_RADAR_SELECTED_ADDR:x}"]
-    selected_msg["SELECTED_LONG_DIST"] = 25.0
+    set_mrr30_can_selected_distance(selected_msg, 25.0)
     selected_msg["SELECTED_REL_SPEED"] = 3.0
-
-    track_msg = RD.rcp.vl["RADAR_TRACK_238"]
-    track_msg["STATE"] = 2
-    track_msg["LONG_DIST"] = 22.0
-    track_msg["LAT_DIST"] = -MRR30_CAN_RADAR_LAT_DIST_OFFSET
 
     rr = RD._update({RD.trigger_msg, MRR30_CAN_RADAR_SELECTED_ADDR})
     self.assertEqual(len(rr.points), 1)
-    self.assertEqual(rr.points[0].vRel, 0.0)
+    self.assertEqual(rr.points[0].vRel, 3.0)
 
-    selected_msg["SELECTED_LONG_DIST"] = 24.9
-    selected_msg["SELECTED_REL_SPEED"] = 3.0
-    track_msg["LONG_DIST"] = 21.9
+    set_mrr30_can_selected_distance(selected_msg, 24.9)
+    selected_msg["SELECTED_REL_SPEED"] = -1.2
 
     rr = RD._update({RD.trigger_msg, MRR30_CAN_RADAR_SELECTED_ADDR})
     self.assertEqual(len(rr.points), 1)
-    self.assertLess(rr.points[0].vRel, 0.0)
-    self.assertNotEqual(rr.points[0].vRel, selected_msg["SELECTED_REL_SPEED"])
+    self.assertAlmostEqual(rr.points[0].vRel, -1.2)
 
   @parameterized("car_name", [CAR.HYUNDAI_ELANTRA_HEV_2021])
-  def test_mrr30_can_full_radar_rejects_side_match(self, car_name):
-    """MRR30_CAN does not anchor the selected lead to a side raw return."""
+  def test_mrr30_can_full_radar_does_not_require_raw_tracks(self, car_name):
+    """MRR30_CAN runtime RadarPoints come from the selected 0x5ed lead only."""
     CarInterface = interfaces[car_name]
     CP = CarInterface.get_non_essential_params(car_name)
     CP.radarUnavailable = False
@@ -316,23 +268,14 @@ class TestRadarInterfaceExt(unittest.TestCase):
     RD = CI.RadarInterface(CP, CP_SP)
 
     selected_msg = RD.rcp.vl[f"RADAR_SELECTED_{MRR30_CAN_RADAR_SELECTED_ADDR:x}"]
-    selected_msg["SELECTED_LONG_DIST"] = 25.0
+    selected_d = 25.0
+    set_mrr30_can_selected_distance(selected_msg, selected_d)
     selected_msg["SELECTED_REL_SPEED"] = 0.0
 
-    side_msg = RD.rcp.vl["RADAR_TRACK_238"]
-    side_msg["STATE"] = 2
-    side_msg["LONG_DIST"] = 22.0
-    side_msg["LAT_DIST"] = MRR30_CAN_RADAR_SELECTED_LATERAL_TOLERANCE - MRR30_CAN_RADAR_LAT_DIST_OFFSET + 0.1
-
-    in_lane_msg = RD.rcp.vl["RADAR_TRACK_23b"]
-    in_lane_msg["STATE"] = 2
-    in_lane_msg["LONG_DIST"] = 21.5
-    in_lane_msg["LAT_DIST"] = -MRR30_CAN_RADAR_LAT_DIST_OFFSET
-
     rr = RD._update({RD.trigger_msg, MRR30_CAN_RADAR_SELECTED_ADDR})
 
     self.assertEqual(len(rr.points), 1)
-    self.assertAlmostEqual(rr.points[0].dRel, selected_msg["SELECTED_LONG_DIST"])
+    self.assertAlmostEqual(rr.points[0].dRel, selected_d)
     self.assertAlmostEqual(rr.points[0].yRel, 0.0)
 
   @parameterized("car_name", [CAR.HYUNDAI_ELANTRA_HEV_2021])
@@ -349,13 +292,9 @@ class TestRadarInterfaceExt(unittest.TestCase):
     RD = CI.RadarInterface(CP, CP_SP)
 
     selected_msg = RD.rcp.vl[f"RADAR_SELECTED_{MRR30_CAN_RADAR_SELECTED_ADDR:x}"]
-    selected_msg["SELECTED_LONG_DIST"] = MRR30_CAN_RADAR_SELECTED_MAX_DISTANCE + 1.0
+    selected_d = MRR30_CAN_RADAR_SELECTED_MAX_DISTANCE + 1.0
+    set_mrr30_can_selected_distance(selected_msg, selected_d)
     selected_msg["SELECTED_REL_SPEED"] = 0.0
-
-    track_msg = RD.rcp.vl["RADAR_TRACK_238"]
-    track_msg["STATE"] = 2
-    track_msg["LONG_DIST"] = selected_msg["SELECTED_LONG_DIST"] - MRR30_CAN_RADAR_LONG_DIST_OFFSET
-    track_msg["LAT_DIST"] = -MRR30_CAN_RADAR_LAT_DIST_OFFSET
 
     rr = RD._update({RD.trigger_msg, MRR30_CAN_RADAR_SELECTED_ADDR})
     self.assertEqual(len(rr.points), 0)
@@ -373,20 +312,16 @@ class TestRadarInterfaceExt(unittest.TestCase):
     CI = CarInterface(CP, CP_SP)
     RD = CI.RadarInterface(CP, CP_SP)
 
-    track_msg = RD.rcp.vl["RADAR_TRACK_238"]
-    track_msg["STATE"] = 2
-    track_msg["LONG_DIST"] = 7.0
-    track_msg["LAT_DIST"] = -1.2
-
     selected_msg = RD.rcp.vl[f"RADAR_SELECTED_{MRR30_CAN_RADAR_SELECTED_ADDR:x}"]
-    selected_msg["SELECTED_LONG_DIST"] = 10.0
+    selected_d = 10.0
+    set_mrr30_can_selected_distance(selected_msg, selected_d)
     selected_msg["SELECTED_REL_SPEED"] = -1.0
 
     rr = RD._update({RD.trigger_msg, MRR30_CAN_RADAR_SELECTED_ADDR})
     self.assertEqual(len(rr.points), 1)
 
-    track_msg["LONG_DIST"] += MRR30_CAN_RADAR_TAKEOFF_DISTANCE_DELTA + 0.5
-    selected_msg["SELECTED_LONG_DIST"] += MRR30_CAN_RADAR_TAKEOFF_DISTANCE_DELTA + 0.5
+    selected_d += MRR30_CAN_RADAR_TAKEOFF_DISTANCE_DELTA + 0.5
+    set_mrr30_can_selected_distance(selected_msg, selected_d)
 
     rr = RD._update({RD.trigger_msg, MRR30_CAN_RADAR_SELECTED_ADDR})
     self.assertEqual(len(rr.points), 0)
