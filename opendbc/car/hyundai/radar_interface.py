@@ -17,6 +17,7 @@ MRR30_CAN_RADAR_TRACK_COUNT = 10
 MRR30_CAN_RADAR_GROUP_SIZE = 3
 MRR30_CAN_RADAR_TRACK_END = MRR30_CAN_RADAR_ADDR + (MRR30_CAN_RADAR_TRACK_COUNT * MRR30_CAN_RADAR_GROUP_SIZE)
 MRR30_CAN_RADAR_TRACK_ADDRS = tuple(range(MRR30_CAN_RADAR_ADDR, MRR30_CAN_RADAR_TRACK_END, MRR30_CAN_RADAR_GROUP_SIZE))
+MRR30_CAN_RADAR_TRACK_MSGS = tuple(f"RADAR_TRACK_{addr:x}" for addr in MRR30_CAN_RADAR_TRACK_ADDRS)
 MRR30_CAN_RADAR_SIGNATURE = (0x238, 0x239, 0x23a, 0x255)
 MRR30_CAN_RADAR_SELECTED_ADDR = 0x5ED
 MRR30_CAN_RADAR_SELECTED_MSG = f"RADAR_SELECTED_{MRR30_CAN_RADAR_SELECTED_ADDR:x}"
@@ -39,10 +40,6 @@ MRR30_CAN_RADAR_TAKEOFF_NEGATIVE_VREL = -0.2
 
 def is_mrr30_can_radar(CP):
   return CP.carFingerprint == CAR.HYUNDAI_ELANTRA_HEV_2021 and bool(CP.flags & HyundaiFlags.MRR30_CAN_RADAR)
-
-
-def mrr30_can_radar_track_msg_name(addr):
-  return f"RADAR_TRACK_{addr:x}"
 
 
 def mrr30_can_radar_point_from_track(msg):
@@ -172,8 +169,8 @@ class RadarInterface(RadarInterfaceBase, RadarInterfaceExt):
 
     best_msg = None
     best_diff = math.inf
-    for addr in MRR30_CAN_RADAR_TRACK_ADDRS:
-      msg = self.rcp.vl[mrr30_can_radar_track_msg_name(addr)]
+    for msg_name in MRR30_CAN_RADAR_TRACK_MSGS:
+      msg = self.rcp.vl[msg_name]
       if not self._mrr30_can_raw_track_valid(msg):
         continue
 
