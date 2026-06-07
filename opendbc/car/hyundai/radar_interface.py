@@ -129,37 +129,6 @@ class RadarInterface(RadarInterfaceBase, RadarInterfaceExt):
     # bit. Without the bank, leads beyond 51.2m wrap back to near distances.
     return selected_msg["SELECTED_LONG_DIST_LOW"] + (selected_msg["SELECTED_LONG_DIST_BANK"] * MRR30_CAN_RADAR_SELECTED_DISTANCE_BANK_SIZE)
 
-  def _mrr30_can_selected_valid(self, selected_d_rel):
-    return MRR30_CAN_RADAR_SELECTED_MIN_DISTANCE < selected_d_rel < MRR30_CAN_RADAR_SELECTED_MAX_DISTANCE
-
-  def _mrr30_can_selected_placeholder(self, selected_d_rel, selected_v_rel):
-    return (
-      MRR30_CAN_RADAR_SELECTED_PLACEHOLDER_MIN_DISTANCE <= selected_d_rel <= MRR30_CAN_RADAR_SELECTED_PLACEHOLDER_MAX_DISTANCE and
-      abs(selected_v_rel) <= MRR30_CAN_RADAR_SELECTED_PLACEHOLDER_MAX_VREL
-    )
-
-  def _mrr30_can_selected_inconsistent_takeoff(self, selected_d_rel, selected_v_rel_raw, selected_valid):
-    if not selected_valid or selected_v_rel_raw >= MRR30_CAN_RADAR_TAKEOFF_NEGATIVE_VREL or not self.mrr30_can_selected_d_history:
-      return False
-    return selected_d_rel - min(self.mrr30_can_selected_d_history) > MRR30_CAN_RADAR_TAKEOFF_DISTANCE_DELTA
-
-  def _mrr30_can_update_selected_history(self, selected_d_rel, selected_valid, selected_updated, selected_placeholder):
-    if selected_placeholder:
-      self.mrr30_can_selected_d_history.clear()
-    elif selected_valid and selected_updated:
-      self.mrr30_can_selected_d_history.append(selected_d_rel)
-
-  def _mrr30_can_publish_selected_point(self, selected_d_rel, selected_v_rel):
-    point = structs.RadarData.RadarPoint()
-    point.trackId = 0
-    point.measured = True
-    point.dRel = selected_d_rel
-    point.yRel = 0.0
-    point.vRel = selected_v_rel
-    point.aRel = float('nan')
-    point.yvRel = float('nan')
-    self.pts[MRR30_CAN_RADAR_SELECTED_ADDR] = point
-
   def _update_mrr30_can(self, ret, updated_messages):
     if not (self.CP_SP.flags & HyundaiFlagsSP.RADAR_FULL_RADAR):
       ret.points = []
@@ -168,20 +137,34 @@ class RadarInterface(RadarInterfaceBase, RadarInterfaceExt):
     selected_msg = self.rcp.vl[MRR30_CAN_RADAR_SELECTED_MSG]
     selected_d_rel = self._mrr30_can_selected_distance(selected_msg)
     selected_v_rel = selected_msg["SELECTED_REL_SPEED"]
-    selected_valid = self._mrr30_can_selected_valid(selected_d_rel)
-    selected_updated = MRR30_CAN_RADAR_SELECTED_ADDR in updated_messages
-    selected_placeholder = self._mrr30_can_selected_placeholder(selected_d_rel, selected_v_rel)
-    selected_inconsistent_takeoff = self._mrr30_can_selected_inconsistent_takeoff(selected_d_rel, selected_v_rel, selected_valid)
-    self._mrr30_can_update_selected_history(selected_d_rel, selected_valid, selected_updated, selected_placeholder)
+    selected_valid = MRR30_CAN_RADAR_SELECTED_MIN_DISTANCE < selected_d_rel < MRR30_CAN_RADAR_SELECTED_MAX_DISTANCE
+    selected_placeholder = (
+      MRR30_CAN_RADAR_SELECTED_PLACEHOLDER_MIN_DISTANCE <= selected_d_rel <= MRR30_CAN_RADAR_SELECTED_PLACEHOLDER_MAX_DISTANCE and
+      abs(selected_v_rel) <= MRR30_CAN_RADAR_SELECTED_PLACEHOLDER_MAX_VREL
+    )
+    stale_takeoff = False
+    if selected_valid and selected_v_rel < MRR30_CAN_RADAR_TAKEOFF_NEGATIVE_VREL and self.mrr30_can_selected_d_history:
+      stale_takeoff = selected_d_rel - min(self.mrr30_can_selected_d_history) > MRR30_CAN_RADAR_TAKEOFF_DISTANCE_DELTA
 
-    # 0x5ed is the radar-selected target and matches stock SCC selected
-    # distance/speed. Raw 0x23x definitions stay in the DBC for Cabana/debug,
-    # but they are too sparse/noisy to publish as RadarPoints on this platform.
-    # The 50.2m/0mps selected-lead placeholder means no usable selected lead:
-    # drop it, but clear stale-history so the next real far target is fresh.
+    # 0x5ed is the radar-selected target and matches stock SCC selected distance
+    # and speed. 50.2m/0mps is a no-lead placeholder; it should not publish a
+    # RadarPoint, but it clears history so the next real far target is fresh.
     self.pts.clear()
-    if selected_valid and not selected_placeholder and not selected_inconsistent_takeoff:
-      self._mrr30_can_publish_selected_point(selected_d_rel, selected_v_rel)
+    if selected_placeholder:
+      self.mrr30_can_selected_d_history.clear()
+    elif selected_valid:
+      if MRR30_CAN_RADAR_SELECTED_ADDR in updated_messages:
+        self.mrr30_can_selected_d_history.append(selected_d_rel)
+      if not stale_takeoff:
+        point = structs.RadarData.RadarPoint()
+        point.trackId = 0
+        point.measured = True
+        point.dRel = selected_d_rel
+        point.yRel = 0.0
+        point.vRel = selected_v_rel
+        point.aRel = float('nan')
+        point.yvRel = float('nan')
+        self.pts[MRR30_CAN_RADAR_SELECTED_ADDR] = point
 
     ret.points = list(self.pts.values())
     return ret
