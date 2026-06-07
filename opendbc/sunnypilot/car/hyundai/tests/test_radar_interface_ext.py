@@ -8,6 +8,7 @@ from opendbc.car.car_helpers import interfaces
 from opendbc.car.hyundai.radar_interface import MRR30_CAN_RADAR_ADDR, MRR30_CAN_RADAR_COUNT, MRR30_CAN_RADAR_GROUP_SIZE, \
                                                  MRR30_CAN_RADAR_SELECTED_ADDR, MRR30_CAN_RADAR_SELECTED_DISTANCE_BANK_SIZE, \
                                                  MRR30_CAN_RADAR_SELECTED_MAX_DISTANCE, \
+                                                 MRR30_CAN_RADAR_SELECTED_PLACEHOLDER_MIN_DISTANCE, \
                                                  MRR30_CAN_RADAR_TAKEOFF_DISTANCE_DELTA, \
                                                  MRR30_CAN_RADAR_TRACK_COUNT, MRR30_CAN_RADAR_TRACK_END
 from opendbc.car.hyundai.values import CAR, HyundaiFlags
@@ -330,3 +331,36 @@ class TestRadarInterfaceExt(unittest.TestCase):
 
     rr = RD._update({RD.trigger_msg, MRR30_CAN_RADAR_SELECTED_ADDR})
     self.assertEqual(len(rr.points), 1)
+
+  @parameterized("car_name", [CAR.HYUNDAI_ELANTRA_HEV_2021])
+  def test_mrr30_can_full_radar_placeholder_resets_stale_history(self, car_name):
+    """The 50.2m/0mps placeholder should not make a later far target look stale."""
+    CarInterface = interfaces[car_name]
+    CP = CarInterface.get_non_essential_params(car_name)
+    CP.radarUnavailable = False
+    CP_SP = CarInterface.get_non_essential_params_sp(CP, car_name)
+
+    setup_interfaces(CarInterface, CP, CP_SP, [], None, None)
+
+    CI = CarInterface(CP, CP_SP)
+    RD = CI.RadarInterface(CP, CP_SP)
+
+    selected_msg = RD.rcp.vl[f"RADAR_SELECTED_{MRR30_CAN_RADAR_SELECTED_ADDR:x}"]
+    set_mrr30_can_selected_distance(selected_msg, 20.0)
+    selected_msg["SELECTED_REL_SPEED"] = -1.0
+
+    rr = RD._update({RD.trigger_msg, MRR30_CAN_RADAR_SELECTED_ADDR})
+    self.assertEqual(len(rr.points), 1)
+
+    set_mrr30_can_selected_distance(selected_msg, MRR30_CAN_RADAR_SELECTED_PLACEHOLDER_MIN_DISTANCE + 0.7)
+    selected_msg["SELECTED_REL_SPEED"] = 0.0
+
+    rr = RD._update({RD.trigger_msg, MRR30_CAN_RADAR_SELECTED_ADDR})
+    self.assertEqual(len(rr.points), 1)
+
+    set_mrr30_can_selected_distance(selected_msg, 65.0)
+    selected_msg["SELECTED_REL_SPEED"] = -2.0
+
+    rr = RD._update({RD.trigger_msg, MRR30_CAN_RADAR_SELECTED_ADDR})
+    self.assertEqual(len(rr.points), 1)
+    self.assertAlmostEqual(rr.points[0].dRel, 65.0)

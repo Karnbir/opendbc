@@ -23,6 +23,9 @@ MRR30_CAN_RADAR_SELECTED_MIN_DISTANCE = 0.5
 MRR30_CAN_RADAR_SELECTED_MAX_DISTANCE = 90.0
 MRR30_CAN_RADAR_SELECTED_DISTANCE_BANK_SIZE = 51.2
 MRR30_CAN_RADAR_SELECTED_INCREASE_HISTORY = 50
+MRR30_CAN_RADAR_SELECTED_PLACEHOLDER_MIN_DISTANCE = 49.5
+MRR30_CAN_RADAR_SELECTED_PLACEHOLDER_MAX_DISTANCE = 50.8
+MRR30_CAN_RADAR_SELECTED_PLACEHOLDER_MAX_VREL = 0.15
 MRR30_CAN_RADAR_TAKEOFF_DISTANCE_DELTA = 1.0
 MRR30_CAN_RADAR_TAKEOFF_NEGATIVE_VREL = -0.2
 
@@ -129,6 +132,12 @@ class RadarInterface(RadarInterfaceBase, RadarInterfaceExt):
   def _mrr30_can_selected_valid(self, selected_d_rel):
     return MRR30_CAN_RADAR_SELECTED_MIN_DISTANCE < selected_d_rel < MRR30_CAN_RADAR_SELECTED_MAX_DISTANCE
 
+  def _mrr30_can_selected_placeholder(self, selected_d_rel, selected_v_rel):
+    return (
+      MRR30_CAN_RADAR_SELECTED_PLACEHOLDER_MIN_DISTANCE <= selected_d_rel <= MRR30_CAN_RADAR_SELECTED_PLACEHOLDER_MAX_DISTANCE and
+      abs(selected_v_rel) <= MRR30_CAN_RADAR_SELECTED_PLACEHOLDER_MAX_VREL
+    )
+
   def _mrr30_can_selected_inconsistent_takeoff(self, selected_d_rel, selected_v_rel_raw, selected_valid):
     if not selected_valid or selected_v_rel_raw >= MRR30_CAN_RADAR_TAKEOFF_NEGATIVE_VREL or not self.mrr30_can_selected_d_history:
       return False
@@ -155,13 +164,18 @@ class RadarInterface(RadarInterfaceBase, RadarInterfaceExt):
     selected_v_rel = selected_msg["SELECTED_REL_SPEED"]
     selected_valid = self._mrr30_can_selected_valid(selected_d_rel)
     selected_updated = MRR30_CAN_RADAR_SELECTED_ADDR in updated_messages
+    selected_placeholder = self._mrr30_can_selected_placeholder(selected_d_rel, selected_v_rel)
+    if selected_placeholder:
+      self.mrr30_can_selected_d_history.clear()
     selected_inconsistent_takeoff = self._mrr30_can_selected_inconsistent_takeoff(selected_d_rel, selected_v_rel, selected_valid)
-    if selected_valid and selected_updated:
+    if selected_valid and selected_updated and not selected_placeholder:
       self.mrr30_can_selected_d_history.append(selected_d_rel)
 
     # 0x5ed is the radar-selected target and matches stock SCC selected
     # distance/speed. Raw 0x23x definitions stay in the DBC for Cabana/debug,
     # but they are too sparse/noisy to publish as RadarPoints on this platform.
+    # The 50.2m/0mps selected-lead placeholder is still published as a far lead,
+    # but clears stale-history so the next real far target is treated as fresh.
     self.pts.clear()
     if selected_valid and not selected_inconsistent_takeoff:
       self._mrr30_can_publish_selected_point(selected_d_rel, selected_v_rel)
