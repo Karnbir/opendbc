@@ -143,6 +143,12 @@ class RadarInterface(RadarInterfaceBase, RadarInterfaceExt):
       return False
     return selected_d_rel - min(self.mrr30_can_selected_d_history) > MRR30_CAN_RADAR_TAKEOFF_DISTANCE_DELTA
 
+  def _mrr30_can_update_selected_history(self, selected_d_rel, selected_valid, selected_updated, selected_placeholder):
+    if selected_placeholder:
+      self.mrr30_can_selected_d_history.clear()
+    elif selected_valid and selected_updated:
+      self.mrr30_can_selected_d_history.append(selected_d_rel)
+
   def _mrr30_can_publish_selected_point(self, selected_d_rel, selected_v_rel):
     point = structs.RadarData.RadarPoint()
     point.trackId = 0
@@ -165,19 +171,16 @@ class RadarInterface(RadarInterfaceBase, RadarInterfaceExt):
     selected_valid = self._mrr30_can_selected_valid(selected_d_rel)
     selected_updated = MRR30_CAN_RADAR_SELECTED_ADDR in updated_messages
     selected_placeholder = self._mrr30_can_selected_placeholder(selected_d_rel, selected_v_rel)
-    if selected_placeholder:
-      self.mrr30_can_selected_d_history.clear()
     selected_inconsistent_takeoff = self._mrr30_can_selected_inconsistent_takeoff(selected_d_rel, selected_v_rel, selected_valid)
-    if selected_valid and selected_updated and not selected_placeholder:
-      self.mrr30_can_selected_d_history.append(selected_d_rel)
+    self._mrr30_can_update_selected_history(selected_d_rel, selected_valid, selected_updated, selected_placeholder)
 
     # 0x5ed is the radar-selected target and matches stock SCC selected
     # distance/speed. Raw 0x23x definitions stay in the DBC for Cabana/debug,
     # but they are too sparse/noisy to publish as RadarPoints on this platform.
-    # The 50.2m/0mps selected-lead placeholder is still published as a far lead,
-    # but clears stale-history so the next real far target is treated as fresh.
+    # The 50.2m/0mps selected-lead placeholder means no usable selected lead:
+    # drop it, but clear stale-history so the next real far target is fresh.
     self.pts.clear()
-    if selected_valid and not selected_inconsistent_takeoff:
+    if selected_valid and not selected_placeholder and not selected_inconsistent_takeoff:
       self._mrr30_can_publish_selected_point(selected_d_rel, selected_v_rel)
 
     ret.points = list(self.pts.values())

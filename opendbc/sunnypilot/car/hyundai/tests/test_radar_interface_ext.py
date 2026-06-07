@@ -334,7 +334,7 @@ class TestRadarInterfaceExt(unittest.TestCase):
 
   @parameterized("car_name", [CAR.HYUNDAI_ELANTRA_HEV_2021])
   def test_mrr30_can_full_radar_placeholder_resets_stale_history(self, car_name):
-    """The 50.2m/0mps placeholder should not make a later far target look stale."""
+    """The 50.2m/0mps placeholder is not a lead, but it resets stale history."""
     CarInterface = interfaces[car_name]
     CP = CarInterface.get_non_essential_params(car_name)
     CP.radarUnavailable = False
@@ -356,7 +356,7 @@ class TestRadarInterfaceExt(unittest.TestCase):
     selected_msg["SELECTED_REL_SPEED"] = 0.0
 
     rr = RD._update({RD.trigger_msg, MRR30_CAN_RADAR_SELECTED_ADDR})
-    self.assertEqual(len(rr.points), 1)
+    self.assertEqual(len(rr.points), 0)
 
     set_mrr30_can_selected_distance(selected_msg, 65.0)
     selected_msg["SELECTED_REL_SPEED"] = -2.0
