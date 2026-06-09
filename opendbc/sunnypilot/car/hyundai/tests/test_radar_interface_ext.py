@@ -6,7 +6,7 @@ from opendbc.testing import parameterized
 from opendbc.car import CanData
 from opendbc.car.car_helpers import interfaces
 from opendbc.car.hyundai.radar_interface import MRR30_CAN_RADAR_ADDR, MRR30_CAN_RADAR_COUNT, MRR30_CAN_RADAR_GROUP_SIZE, \
-                                                 MRR30_CAN_RADAR_SELECTED_ADDR, MRR30_CAN_RADAR_SELECTED_DISTANCE_BANK_SIZE, \
+                                                 MRR30_CAN_RADAR_SELECTED_ADDR, \
                                                  MRR30_CAN_RADAR_SELECTED_MAX_DISTANCE, \
                                                  MRR30_CAN_RADAR_SELECTED_PLACEHOLDER_MIN_DISTANCE, \
                                                  MRR30_CAN_RADAR_TAKEOFF_DISTANCE_DELTA, \
@@ -36,9 +36,7 @@ MRR30_CAN_RADAR_CARS = [
 
 
 def set_mrr30_can_selected_distance(selected_msg, distance):
-  bank = int(distance >= MRR30_CAN_RADAR_SELECTED_DISTANCE_BANK_SIZE)
-  selected_msg["SELECTED_LONG_DIST_LOW"] = distance - (bank * MRR30_CAN_RADAR_SELECTED_DISTANCE_BANK_SIZE)
-  selected_msg["SELECTED_LONG_DIST_BANK"] = bank
+  selected_msg["SELECTED_LONG_DIST"] = distance
 
 
 class TestRadarInterfaceExt(unittest.TestCase):

@@ -53,8 +53,8 @@ BU_: XXX
   # Elantra HEV. 0x5ed carries the radar-selected target distance/speed and
   # matches stock SCC selected lead distance/speed on route data. Raw-track
   # REL_SPEED remains analysis-only; acceleration and lateral velocity are
-  # unconfirmed. SELECTED_LONG_DIST_LOW is modulo 51.2m; SELECTED_LONG_DIST_BANK
-  # is bit 17 and extends selected distance by 51.2m when set.
+  # unconfirmed. SELECTED_LONG_DIST combines the 13-bit lower distance and the 1-bit bank
+  # (which is bit 17) into a single 14-bit signal spanning up to 102.39m.
   # SELECTED_REL_SPEED starts after that bank bit at bit 19.
   for addr in range(0x238, 0x256, 3):
     parts.append(f"""
@@ -80,8 +80,7 @@ BO_ {addr + 2} RADAR_TRACK_{addr + 2:x}: 8 RADAR
 
   parts.append(f"""
 BO_ 1517 RADAR_SELECTED_5ed: 8 RADAR
- SG_ SELECTED_LONG_DIST_LOW : 4|13@1+ ({SELECTED_DISTANCE_FACTOR},0) [0|51.19375] "m" XXX
- SG_ SELECTED_LONG_DIST_BANK : 17|1@1+ (1,0) [0|1] "" XXX
+ SG_ SELECTED_LONG_DIST : 4|14@1+ ({SELECTED_DISTANCE_FACTOR},0) [0|102.39375] "m" XXX
  SG_ SELECTED_REL_SPEED : 19|8@1- ({SELECTED_REL_SPEED_FACTOR},0) [-12.8|12.7] "m/s" XXX
     """)
 

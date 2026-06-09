@@ -21,7 +21,6 @@ MRR30_CAN_RADAR_SELECTED_ADDR = 0x5ED
 MRR30_CAN_RADAR_SELECTED_MSG = f"RADAR_SELECTED_{MRR30_CAN_RADAR_SELECTED_ADDR:x}"
 MRR30_CAN_RADAR_SELECTED_MIN_DISTANCE = 0.5
 MRR30_CAN_RADAR_SELECTED_MAX_DISTANCE = 90.0
-MRR30_CAN_RADAR_SELECTED_DISTANCE_BANK_SIZE = 51.2
 MRR30_CAN_RADAR_SELECTED_INCREASE_HISTORY = 50
 MRR30_CAN_RADAR_SELECTED_PLACEHOLDER_MIN_DISTANCE = 49.5
 MRR30_CAN_RADAR_SELECTED_PLACEHOLDER_MAX_DISTANCE = 50.8
@@ -123,19 +122,13 @@ class RadarInterface(RadarInterfaceBase, RadarInterfaceExt):
     ret.points = list(self.pts.values())
     return ret
 
-  @staticmethod
-  def _mrr30_can_selected_distance(selected_msg):
-    # 0x5ed selected distance uses a 13-bit low value plus a route-proven bank
-    # bit. Without the bank, leads beyond 51.2m wrap back to near distances.
-    return selected_msg["SELECTED_LONG_DIST_LOW"] + (selected_msg["SELECTED_LONG_DIST_BANK"] * MRR30_CAN_RADAR_SELECTED_DISTANCE_BANK_SIZE)
-
   def _update_mrr30_can(self, ret, updated_messages):
     if not (self.CP_SP.flags & HyundaiFlagsSP.RADAR_FULL_RADAR):
       ret.points = []
       return ret
 
     selected_msg = self.rcp.vl[MRR30_CAN_RADAR_SELECTED_MSG]
-    selected_d_rel = self._mrr30_can_selected_distance(selected_msg)
+    selected_d_rel = selected_msg["SELECTED_LONG_DIST"]
     selected_v_rel = selected_msg["SELECTED_REL_SPEED"]
     selected_valid = MRR30_CAN_RADAR_SELECTED_MIN_DISTANCE < selected_d_rel < MRR30_CAN_RADAR_SELECTED_MAX_DISTANCE
     selected_placeholder = (
@@ -153,8 +146,7 @@ class RadarInterface(RadarInterfaceBase, RadarInterfaceExt):
     if selected_placeholder:
       self.mrr30_can_selected_d_history.clear()
     elif selected_valid:
-      if MRR30_CAN_RADAR_SELECTED_ADDR in updated_messages:
-        self.mrr30_can_selected_d_history.append(selected_d_rel)
+      self.mrr30_can_selected_d_history.append(selected_d_rel)
       if not stale_takeoff:
         point = structs.RadarData.RadarPoint()
         point.trackId = 0
