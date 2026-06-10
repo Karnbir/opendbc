@@ -1,7 +1,8 @@
 import math
+import sys
 from collections import deque
 
-from opendbc.can import CANParser
+from opendbc.can.parser import CANParser
 from opendbc.car import Bus, structs
 from opendbc.car.interfaces import RadarInterfaceBase
 from opendbc.car.hyundai.values import CAR, DBC, HyundaiFlags
@@ -9,8 +10,15 @@ from opendbc.car.hyundai.values import CAR, DBC, HyundaiFlags
 from opendbc.sunnypilot.car.hyundai.radar_interface_ext import RadarInterfaceExt
 from opendbc.sunnypilot.car.hyundai.values import HyundaiFlagsSP
 
-RADAR_START_ADDR = 0x500
-RADAR_MSG_COUNT = 32
+MANDO_RADAR_ADDR = 0x500
+RADAR_START_ADDR = MANDO_RADAR_ADDR
+MANDO_RADAR_COUNT = 32
+MRREVO14F_RADAR_ADDR = 0x602
+MRREVO14F_RADAR_COUNT = 16
+MRR30_RADAR_ADDR = 0x210
+MRR30_RADAR_COUNT = 16
+MRR35_RADAR_ADDR = 0x3A5
+MRR35_RADAR_COUNT = 32
 MRR30_CAN_RADAR_ADDR = 0x238
 MRR30_CAN_RADAR_COUNT = 0x256 - MRR30_CAN_RADAR_ADDR
 MRR30_CAN_RADAR_TRACK_COUNT = 10
@@ -35,7 +43,7 @@ def is_mrr30_can_radar(CP):
   return CP.carFingerprint == CAR.HYUNDAI_ELANTRA_HEV_2021 and bool(CP.flags & HyundaiFlags.MRR30_CAN_RADAR)
 
 
-def get_radar_can_parser(CP, radar_addr=RADAR_START_ADDR, radar_count=RADAR_MSG_COUNT, selected_addr=None, track_addrs=None):
+def get_radar_can_parser(CP, radar_addr=MANDO_RADAR_ADDR, radar_count=MANDO_RADAR_COUNT, selected_addr=None, track_addrs=None):
   if Bus.radar not in DBC[CP.carFingerprint]:
     return None
 
@@ -51,11 +59,25 @@ class RadarInterface(RadarInterfaceBase, RadarInterfaceExt):
     RadarInterfaceBase.__init__(self, CP, CP_SP)
     RadarInterfaceExt.__init__(self, CP, CP_SP)
     self.CP_flags = CP.flags
+    self.CP_SP = CP_SP
+    self.track_id = 0
+    self.CP_SP = CP_SP
+    self.track_id = 0
+    self.radar_fault = False
+    self.radar_done = False
+    self.pts = {}
+
     self.mrr30_can_radar = is_mrr30_can_radar(CP)
     if self.mrr30_can_radar:
       self.radar_addr, self.radar_count = MRR30_CAN_RADAR_ADDR, MRR30_CAN_RADAR_COUNT
+    elif self.CP_flags & getattr(HyundaiFlags, 'MRREVO14F_RADAR', 0):
+      self.radar_addr, self.radar_count = MRREVO14F_RADAR_ADDR, MRREVO14F_RADAR_COUNT
+    elif self.CP_flags & getattr(HyundaiFlags, 'MRR30_RADAR', 0):
+      self.radar_addr, self.radar_count = MRR30_RADAR_ADDR, MRR30_RADAR_COUNT
+    elif self.CP_flags & getattr(HyundaiFlags, 'MRR35_RADAR', 0):
+      self.radar_addr, self.radar_count = MRR35_RADAR_ADDR, MRR35_RADAR_COUNT
     else:
-      self.radar_addr, self.radar_count = RADAR_START_ADDR, RADAR_MSG_COUNT
+      self.radar_addr, self.radar_count = MANDO_RADAR_ADDR, MANDO_RADAR_COUNT
 
     self.updated_messages = set()
     self.trigger_msg = MRR30_CAN_RADAR_SELECTED_ADDR if self.mrr30_can_radar else self.radar_addr + self.radar_count - 1
