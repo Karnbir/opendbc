@@ -1,5 +1,4 @@
 import math
-import sys
 from collections import deque
 
 from opendbc.can.parser import CANParser
@@ -60,9 +59,6 @@ class RadarInterface(RadarInterfaceBase, RadarInterfaceExt):
     RadarInterfaceExt.__init__(self, CP, CP_SP)
     self.CP_flags = CP.flags
     self.CP_SP = CP_SP
-    self.track_id = 0
-    self.CP_SP = CP_SP
-    self.track_id = 0
     self.radar_fault = False
     self.radar_done = False
     self.pts = {}
