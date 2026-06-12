@@ -2,12 +2,14 @@ from hypothesis import settings, given, strategies as st
 
 import unittest
 
+from opendbc.car.can_definitions import CanData
 from opendbc.car import gen_empty_fingerprint
 from opendbc.car.structs import CarParams
 from opendbc.car.fw_versions import build_fw_dict
 from opendbc.car.hyundai.interface import CarInterface
 from opendbc.car.hyundai.hyundaicanfd import CanBus
-from opendbc.car.hyundai.radar_interface import RADAR_START_ADDR, MRR30_CAN_RADAR_SIGNATURE
+from opendbc.car.hyundai.radar_interface import RADAR_START_ADDR, MRR30_CAN_RADAR_SELECTED_ADDR, MRR30_CAN_RADAR_SIGNATURE, \
+                                               scan_mrr30_can_selected
 from opendbc.car.hyundai.values import CAMERA_SCC_CAR, CANFD_CAR, CAN_GEARS, CAR, CHECKSUM, DATE_FW_ECUS, \
                                          HYBRID_CAR, EV_CAR, FW_QUERY_CONFIG, LEGACY_SAFETY_MODE_CAR, CANFD_FUZZY_WHITELIST, \
                                          UNSUPPORTED_LONGITUDINAL_CAR, PLATFORM_CODE_ECUS, HYUNDAI_VERSION_REQUEST_LONG, \
@@ -16,6 +18,12 @@ from opendbc.car.hyundai.values import CAMERA_SCC_CAR, CANFD_CAR, CAN_GEARS, CAR
 from opendbc.car.hyundai.fingerprints import FW_VERSIONS
 
 Ecu = CarParams.Ecu
+
+
+def mrr30_can_selected_dat(d_rel, v_rel):
+  raw_d = int(round(d_rel / 0.00625))
+  raw_v = int(round(v_rel / 0.1)) & ((1 << 11) - 1)
+  return int.to_bytes((raw_d << 4) | (raw_v << 19), 8, "little")
 
 # Some platforms have date codes in a different format we don't yet parse (or are missing).
 # For now, assert list of expected missing date cars
@@ -42,6 +50,34 @@ NO_DATES_PLATFORMS = {
 }
 
 CANFD_EXPECTED_ECUS = {Ecu.fwdCamera, Ecu.fwdRadar}
+
+
+class TestHyundaiRadarInterface(unittest.TestCase):
+  def test_mrr30_can_selected_accepts_tuple_frames(self):
+    dat = mrr30_can_selected_dat(12.5, -1.2)
+
+    last_ts, selected = scan_mrr30_can_selected([
+      (123, [(MRR30_CAN_RADAR_SELECTED_ADDR, dat, 1)]),
+    ])
+
+    assert last_ts == 123
+    assert selected is not None
+    self.assertAlmostEqual(selected[0], 12.5)
+    self.assertAlmostEqual(selected[1], -1.2)
+    assert selected[2] == 123
+
+  def test_mrr30_can_selected_accepts_can_data_frames(self):
+    dat = mrr30_can_selected_dat(12.5, -1.2)
+
+    last_ts, selected = scan_mrr30_can_selected([
+      (123, [CanData(MRR30_CAN_RADAR_SELECTED_ADDR, dat, 1)]),
+    ])
+
+    assert last_ts == 123
+    assert selected is not None
+    self.assertAlmostEqual(selected[0], 12.5)
+    self.assertAlmostEqual(selected[1], -1.2)
+    assert selected[2] == 123
 
 
 class TestHyundaiFingerprint(unittest.TestCase):

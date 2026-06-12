@@ -57,6 +57,17 @@ def decode_mrr30_can_selected(dat):
   return mrr30_can_radar_bits(dat, 4, 14) * 0.00625, mrr30_can_radar_bits(dat, 19, 11, True) * 0.1
 
 
+def scan_mrr30_can_selected(can_strings):
+  selected = None
+  last_ts = 0
+  for log_mono_time, can_list in can_strings:
+    last_ts = max(last_ts, log_mono_time)
+    for address, dat, src in can_list:
+      if src == 1 and address == MRR30_CAN_RADAR_SELECTED_ADDR:
+        selected = (*decode_mrr30_can_selected(bytes(dat)), log_mono_time)
+  return last_ts, selected
+
+
 def get_radar_can_parser(CP, radar_addr=MANDO_RADAR_ADDR, radar_count=MANDO_RADAR_COUNT, selected_addr=None,
                          track_addrs=None, track_frequency=50, selected_frequency=20):
   if Bus.radar not in DBC[CP.carFingerprint]:
@@ -114,12 +125,10 @@ class RadarInterface(RadarInterfaceBase, RadarInterfaceExt):
       return super().update(None)
 
     if self.mrr30_can_radar:
-      for log_mono_time, can_list in can_strings:
-        self.mrr30_can_ts = max(self.mrr30_can_ts, log_mono_time)
-        for can in can_list:
-          if can.src == 1 and can.address == MRR30_CAN_RADAR_SELECTED_ADDR:
-            self.mrr30_can_selected_d_rel, self.mrr30_can_selected_v_rel = decode_mrr30_can_selected(bytes(can.dat))
-            self.mrr30_can_selected_ts = log_mono_time
+      last_ts, selected = scan_mrr30_can_selected(can_strings)
+      self.mrr30_can_ts = max(self.mrr30_can_ts, last_ts)
+      if selected is not None:
+        self.mrr30_can_selected_d_rel, self.mrr30_can_selected_v_rel, self.mrr30_can_selected_ts = selected
 
     vls = self.rcp.update(can_strings)
     self.updated_messages.update(vls)
