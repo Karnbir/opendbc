@@ -157,7 +157,7 @@ class TestRadarInterfaceExt(unittest.TestCase):
 
   @parameterized("car_name", [CAR.HYUNDAI_ELANTRA_HEV_2021])
   def test_mrr30_can_full_radar_publishes_raw_tracks(self, car_name):
-    """MRR30_CAN rawradar publishes corrected raw radar tracks, not 0x5ed."""
+    """MRR30_CAN rawradar publishes raw tracks when 0x5ed is not valid."""
     CarInterface = interfaces[car_name]
     CP = CarInterface.get_non_essential_params(car_name)
     CP.radarUnavailable = False
@@ -209,9 +209,42 @@ class TestRadarInterfaceExt(unittest.TestCase):
     rr = RD._update({RD.trigger_msg})
     self.assertEqual(len(rr.points), 0)
 
-    msg0["LONG_DIST"] = 91.0
+    msg0["LONG_DIST"] = 101.0
     rr = RD._update({RD.trigger_msg})
     self.assertEqual(len(rr.points), 0)
+
+  @parameterized("car_name", [CAR.HYUNDAI_ELANTRA_HEV_2021])
+  def test_mrr30_can_full_radar_calibrates_selected_raw_track_to_5ed(self, car_name):
+    """MRR30_CAN uses 0x5ed to calibrate the matching raw in-lane selected track."""
+    CarInterface = interfaces[car_name]
+    CP = CarInterface.get_non_essential_params(car_name)
+    CP.radarUnavailable = False
+    CP_SP = CarInterface.get_non_essential_params_sp(CP, car_name)
+
+    setup_interfaces(CarInterface, CP, CP_SP, [], None, None)
+
+    CI = CarInterface(CP, CP_SP)
+    RD = CI.RadarInterface(CP, CP_SP)
+
+    RD.mrr30_can_ts = 1_000_000_000
+    RD.mrr30_can_selected_ts = 1_000_000_000
+    RD.mrr30_can_selected_d_rel = 90.0
+    RD.mrr30_can_selected_v_rel = -1.1
+    RD.rcp.vl["RADAR_TRACK_238"]["LONG_DIST"] = 60.0
+    RD.rcp.vl["RADAR_TRACK_238"]["LAT_DIST"] = -0.2
+    RD.rcp.vl["RADAR_TRACK_239"]["REL_SPEED"] = 0.1
+    RD.rcp.vl["RADAR_TRACK_23b"]["LONG_DIST"] = 20.0
+    RD.rcp.vl["RADAR_TRACK_23b"]["LAT_DIST"] = 3.0
+    RD.rcp.vl["RADAR_TRACK_23c"]["REL_SPEED"] = 0.0
+
+    rr = RD._update({RD.trigger_msg})
+
+    points = {pt.trackId: pt for pt in rr.points}
+    self.assertEqual(len(points), 2)
+    self.assertAlmostEqual(points[0x238].dRel, 90.0)
+    self.assertAlmostEqual(points[0x238].yRel, -0.2)
+    self.assertAlmostEqual(points[0x238].vRel, -1.1)
+    self.assertAlmostEqual(points[0x23b].dRel, 20.0)
 
   @parameterized("car_name", [CAR.HYUNDAI_ELANTRA_HEV_2021])
   def test_mrr30_can_full_radar_publishes_multiple_raw_tracks(self, car_name):

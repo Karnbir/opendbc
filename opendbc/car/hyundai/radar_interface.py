@@ -25,14 +25,33 @@ MRR30_CAN_RADAR_TRACK_END = MRR30_CAN_RADAR_ADDR + (MRR30_CAN_RADAR_TRACK_COUNT 
 MRR30_CAN_RADAR_SIGNATURE = (0x238, 0x239, 0x23a, 0x255)
 MRR30_CAN_RADAR_RAW_FREQ = 5
 MRR30_CAN_RADAR_RAW_MIN_DISTANCE = 0.75
-MRR30_CAN_RADAR_RAW_MAX_DISTANCE = 90.0
+MRR30_CAN_RADAR_RAW_MAX_DISTANCE = 100.0
 MRR30_CAN_RADAR_SELECTED_ADDR = 0x5ED
+MRR30_CAN_RADAR_SELECTED_MIN_DISTANCE = 0.75
+MRR30_CAN_RADAR_SELECTED_MAX_DISTANCE = 100.0
+MRR30_CAN_RADAR_SELECTED_PLACEHOLDER_MIN_DISTANCE = 49.5
+MRR30_CAN_RADAR_SELECTED_PLACEHOLDER_MAX_DISTANCE = 50.8
+MRR30_CAN_RADAR_SELECTED_PLACEHOLDER_MAX_VREL = 0.15
+MRR30_CAN_RADAR_SELECTED_MAX_AGE_NS = 300_000_000
+MRR30_CAN_RADAR_SELECTED_MATCH_MAX_Y = 2.0
+MRR30_CAN_RADAR_SELECTED_MATCH_MAX_DISTANCE_DELTA = 35.0
 
 # POC for parsing corner radars: https://github.com/commaai/openpilot/pull/24221/
 
 
 def is_mrr30_can_radar(CP):
   return CP.carFingerprint == CAR.HYUNDAI_ELANTRA_HEV_2021 and bool(CP.flags & HyundaiFlags.MRR30_CAN_RADAR)
+
+
+def mrr30_can_radar_bits(dat, start, length, signed=False):
+  value = (int.from_bytes(dat, "little") >> start) & ((1 << length) - 1)
+  if signed and value >= (1 << (length - 1)):
+    value -= 1 << length
+  return value
+
+
+def decode_mrr30_can_selected(dat):
+  return mrr30_can_radar_bits(dat, 4, 14) * 0.00625, mrr30_can_radar_bits(dat, 19, 11, True) * 0.1
 
 
 def get_radar_can_parser(CP, radar_addr=MANDO_RADAR_ADDR, radar_count=MANDO_RADAR_COUNT, selected_addr=None,
@@ -72,6 +91,10 @@ class RadarInterface(RadarInterfaceBase, RadarInterfaceExt):
     self.updated_messages = set()
     self.trigger_msg = MRR30_CAN_RADAR_TRACK_END - 1 if self.mrr30_can_radar else self.radar_addr + self.radar_count - 1
     self.track_id = 0
+    self.mrr30_can_selected_d_rel = float('nan')
+    self.mrr30_can_selected_v_rel = float('nan')
+    self.mrr30_can_selected_ts = 0
+    self.mrr30_can_ts = 0
 
     self.radar_off_can = CP.radarUnavailable
     selected_addr = None
@@ -85,6 +108,14 @@ class RadarInterface(RadarInterfaceBase, RadarInterfaceExt):
   def update(self, can_strings):
     if self.radar_off_can or (self.rcp is None):
       return super().update(None)
+
+    if self.mrr30_can_radar:
+      for log_mono_time, can_list in can_strings:
+        self.mrr30_can_ts = max(self.mrr30_can_ts, log_mono_time)
+        for can in can_list:
+          if can.src == 1 and can.address == MRR30_CAN_RADAR_SELECTED_ADDR:
+            self.mrr30_can_selected_d_rel, self.mrr30_can_selected_v_rel = decode_mrr30_can_selected(bytes(can.dat))
+            self.mrr30_can_selected_ts = log_mono_time
 
     vls = self.rcp.update(can_strings)
     self.updated_messages.update(vls)
@@ -140,9 +171,16 @@ class RadarInterface(RadarInterfaceBase, RadarInterfaceExt):
       return ret
 
     self.pts.clear()
-    # rawradar intentionally publishes only corrected 0x238-0x255 raw slots.
-    # 0x5ed remains in the DBC for analysis, but mixing selected and raw leads
-    # made radard jump between different lead sources on route data.
+    selected_d_rel = self.mrr30_can_selected_d_rel
+    selected_v_rel = self.mrr30_can_selected_v_rel
+    selected_valid = MRR30_CAN_RADAR_SELECTED_MIN_DISTANCE < selected_d_rel < MRR30_CAN_RADAR_SELECTED_MAX_DISTANCE
+    selected_placeholder = (
+      MRR30_CAN_RADAR_SELECTED_PLACEHOLDER_MIN_DISTANCE <= selected_d_rel <= MRR30_CAN_RADAR_SELECTED_PLACEHOLDER_MAX_DISTANCE and
+      abs(selected_v_rel) <= MRR30_CAN_RADAR_SELECTED_PLACEHOLDER_MAX_VREL
+    )
+    selected_stale = self.mrr30_can_ts - self.mrr30_can_selected_ts > MRR30_CAN_RADAR_SELECTED_MAX_AGE_NS
+    selected_valid = selected_valid and not selected_placeholder and not selected_stale
+
     for addr in range(MRR30_CAN_RADAR_ADDR, MRR30_CAN_RADAR_TRACK_END, MRR30_CAN_RADAR_GROUP_SIZE):
       msg0 = self.rcp.vl[f"RADAR_TRACK_{addr:x}"]
       msg1 = self.rcp.vl[f"RADAR_TRACK_{addr + 1:x}"]
@@ -158,6 +196,24 @@ class RadarInterface(RadarInterfaceBase, RadarInterfaceExt):
         point.aRel = float('nan')
         point.yvRel = float('nan')
         self.pts[addr] = point
+
+    # rawradar publishes raw 0x238-0x255 slots, but calibrates the matching
+    # selected in-lane track to 0x5ed. That keeps one source of truth for the
+    # lead distance/speed without adding a separate 0x5ed RadarPoint for radard
+    # to jump to.
+    if selected_valid and self.pts:
+      candidates = [
+        point for point in self.pts.values()
+        if abs(point.yRel) <= MRR30_CAN_RADAR_SELECTED_MATCH_MAX_Y and
+        abs(point.dRel - selected_d_rel) <= MRR30_CAN_RADAR_SELECTED_MATCH_MAX_DISTANCE_DELTA
+      ]
+      if candidates:
+        selected_point = min(
+          candidates,
+          key=lambda point: abs(point.dRel - selected_d_rel) / 8.0 + abs(point.yRel) / 2.0 + abs(point.vRel - selected_v_rel) / 5.0,
+        )
+        selected_point.dRel = selected_d_rel
+        selected_point.vRel = selected_v_rel
 
     ret.points = list(self.pts.values())
     return ret

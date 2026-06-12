@@ -51,7 +51,8 @@ BU_: XXX
   # track groups are 0x238-0x255. LONG_DIST and LAT_DIST are decoded from msg0;
   # the old candidate fields at 6|7 and 55|8 were aliases/noise, not stable
   # object coordinates. 0x5ed carries the radar-selected target distance/speed
-  # and remains in the DBC for Cabana/reference comparisons.
+  # and is used by the radar interface as the selected-track calibration
+  # reference, not as a separate published RadarPoint.
   #
   # SELECTED_LONG_DIST combines the 13-bit lower distance and the 1-bit bank
   # (which is bit 17) into a single 14-bit signal spanning up to 102.39m.
