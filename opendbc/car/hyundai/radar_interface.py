@@ -38,6 +38,7 @@ MRR30_CAN_RADAR_SELECTED_TAKEOFF_DISTANCE_DELTA = 1.0
 MRR30_CAN_RADAR_SELECTED_TAKEOFF_NEGATIVE_VREL = -0.2
 MRR30_CAN_RADAR_SELECTED_MATCH_MAX_Y = 2.0
 MRR30_CAN_RADAR_SELECTED_MATCH_MAX_DISTANCE_DELTA = 35.0
+MRR30_CAN_RADAR_SELECTED_TRACK_ID = MRR30_CAN_RADAR_SELECTED_ADDR
 
 # POC for parsing corner radars: https://github.com/commaai/openpilot/pull/24221/
 
@@ -221,23 +222,36 @@ class RadarInterface(RadarInterfaceBase, RadarInterfaceExt):
         point.yvRel = float('nan')
         self.pts[addr] = point
 
-    # rawradar publishes raw 0x238-0x255 slots, but calibrates the matching
-    # selected in-lane track to 0x5ed. That keeps one source of truth for the
-    # lead distance/speed without adding a separate 0x5ed RadarPoint for radard
-    # to jump to.
-    if selected_valid and self.pts:
+    # The 0x5ed selected lead is the stable SCC-selected in-lane lead. The raw
+    # 0x23x in-lane slots can jump between distances, so keep them from
+    # competing with the selected lead while still allowing off-lane raw points.
+    if selected_valid:
       candidates = [
         point for point in self.pts.values()
         if abs(point.yRel) <= MRR30_CAN_RADAR_SELECTED_MATCH_MAX_Y and
         abs(point.dRel - selected_d_rel) <= MRR30_CAN_RADAR_SELECTED_MATCH_MAX_DISTANCE_DELTA
       ]
+      selected_y_rel = 0.0
       if candidates:
         selected_point = min(
           candidates,
           key=lambda point: abs(point.dRel - selected_d_rel) / 8.0 + abs(point.yRel) / 2.0 + abs(point.vRel - selected_v_rel) / 5.0,
         )
-        selected_point.dRel = selected_d_rel
-        selected_point.vRel = selected_v_rel
+        selected_y_rel = selected_point.yRel
+
+      for addr, point in list(self.pts.items()):
+        if abs(point.yRel) <= MRR30_CAN_RADAR_SELECTED_MATCH_MAX_Y:
+          del self.pts[addr]
+
+      selected_point = structs.RadarData.RadarPoint()
+      selected_point.trackId = MRR30_CAN_RADAR_SELECTED_TRACK_ID
+      selected_point.measured = True
+      selected_point.dRel = selected_d_rel
+      selected_point.yRel = selected_y_rel
+      selected_point.vRel = selected_v_rel
+      selected_point.aRel = float('nan')
+      selected_point.yvRel = float('nan')
+      self.pts[MRR30_CAN_RADAR_SELECTED_TRACK_ID] = selected_point
 
     ret.points = list(self.pts.values())
     return ret
