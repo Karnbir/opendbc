@@ -189,7 +189,7 @@ class TestRadarInterfaceExt(unittest.TestCase):
 
   @parameterized("car_name", [CAR.HYUNDAI_ELANTRA_HEV_2021])
   def test_mrr30_can_full_radar_rejects_invalid_raw_distance(self, car_name):
-    """MRR30_CAN raw tracks reject zero and far sentinel-like distances."""
+    """MRR30_CAN raw tracks reject only zero/near-zero empty slots."""
     CarInterface = interfaces[car_name]
     CP = CarInterface.get_non_essential_params(car_name)
     CP.radarUnavailable = False
@@ -209,9 +209,19 @@ class TestRadarInterfaceExt(unittest.TestCase):
     rr = RD._update({RD.trigger_msg})
     self.assertEqual(len(rr.points), 0)
 
-    msg0["LONG_DIST"] = 101.0
+    msg0["LONG_DIST"] = 0.04
     rr = RD._update({RD.trigger_msg})
     self.assertEqual(len(rr.points), 0)
+
+    msg0["LONG_DIST"] = 0.1
+    rr = RD._update({RD.trigger_msg})
+    self.assertEqual(len(rr.points), 1)
+    self.assertAlmostEqual(rr.points[0].dRel, 0.1)
+
+    msg0["LONG_DIST"] = 101.0
+    rr = RD._update({RD.trigger_msg})
+    self.assertEqual(len(rr.points), 1)
+    self.assertAlmostEqual(rr.points[0].dRel, 101.0)
 
   @parameterized("car_name", [CAR.HYUNDAI_ELANTRA_HEV_2021])
   def test_mrr30_can_full_radar_calibrates_selected_raw_track_to_5ed(self, car_name):
@@ -229,7 +239,7 @@ class TestRadarInterfaceExt(unittest.TestCase):
     RD.mrr30_can_ts = 1_000_000_000
     RD.mrr30_can_selected_ts = 1_000_000_000
     RD.mrr30_can_selected_d_rel = 90.0
-    RD.mrr30_can_selected_v_rel = -1.1
+    RD.mrr30_can_selected_v_rel = 0.1
     RD.rcp.vl["RADAR_TRACK_238"]["LONG_DIST"] = 60.0
     RD.rcp.vl["RADAR_TRACK_238"]["LAT_DIST"] = -0.2
     RD.rcp.vl["RADAR_TRACK_239"]["REL_SPEED"] = 0.1
@@ -243,8 +253,42 @@ class TestRadarInterfaceExt(unittest.TestCase):
     self.assertEqual(len(points), 2)
     self.assertAlmostEqual(points[0x238].dRel, 90.0)
     self.assertAlmostEqual(points[0x238].yRel, -0.2)
-    self.assertAlmostEqual(points[0x238].vRel, -1.1)
+    self.assertAlmostEqual(points[0x238].vRel, 0.1)
     self.assertAlmostEqual(points[0x23b].dRel, 20.0)
+
+  @parameterized("car_name", [CAR.HYUNDAI_ELANTRA_HEV_2021])
+  def test_mrr30_can_full_radar_does_not_calibrate_placeholder_or_stale_5ed(self, car_name):
+    """MRR30_CAN keeps raw output when 0x5ed is placeholder or stale after takeoff."""
+    CarInterface = interfaces[car_name]
+    CP = CarInterface.get_non_essential_params(car_name)
+    CP.radarUnavailable = False
+    CP_SP = CarInterface.get_non_essential_params_sp(CP, car_name)
+
+    setup_interfaces(CarInterface, CP, CP_SP, [], None, None)
+
+    CI = CarInterface(CP, CP_SP)
+    RD = CI.RadarInterface(CP, CP_SP)
+
+    RD.rcp.vl["RADAR_TRACK_238"]["LONG_DIST"] = 24.0
+    RD.rcp.vl["RADAR_TRACK_238"]["LAT_DIST"] = 0.0
+    RD.rcp.vl["RADAR_TRACK_239"]["REL_SPEED"] = 0.2
+
+    RD.mrr30_can_ts = 1_000_000_000
+    RD.mrr30_can_selected_ts = 1_000_000_000
+    RD.mrr30_can_selected_d_rel = 50.2
+    RD.mrr30_can_selected_v_rel = 0.0
+    rr = RD._update({RD.trigger_msg})
+    self.assertEqual(len(rr.points), 1)
+    self.assertAlmostEqual(rr.points[0].dRel, 24.0)
+    self.assertAlmostEqual(rr.points[0].vRel, 0.2)
+
+    RD.mrr30_can_selected_d_history.extend([20.0, 20.2, 20.4])
+    RD.mrr30_can_selected_d_rel = 25.0
+    RD.mrr30_can_selected_v_rel = -1.0
+    rr = RD._update({RD.trigger_msg})
+    self.assertEqual(len(rr.points), 1)
+    self.assertAlmostEqual(rr.points[0].dRel, 24.0)
+    self.assertAlmostEqual(rr.points[0].vRel, 0.2)
 
   @parameterized("car_name", [CAR.HYUNDAI_ELANTRA_HEV_2021])
   def test_mrr30_can_full_radar_publishes_multiple_raw_tracks(self, car_name):

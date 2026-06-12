@@ -1,4 +1,5 @@
 import math
+from collections import deque
 
 from opendbc.can.parser import CANParser
 from opendbc.car import Bus, structs
@@ -24,8 +25,7 @@ MRR30_CAN_RADAR_GROUP_SIZE = 3
 MRR30_CAN_RADAR_TRACK_END = MRR30_CAN_RADAR_ADDR + (MRR30_CAN_RADAR_TRACK_COUNT * MRR30_CAN_RADAR_GROUP_SIZE)
 MRR30_CAN_RADAR_SIGNATURE = (0x238, 0x239, 0x23a, 0x255)
 MRR30_CAN_RADAR_RAW_FREQ = 5
-MRR30_CAN_RADAR_RAW_MIN_DISTANCE = 0.75
-MRR30_CAN_RADAR_RAW_MAX_DISTANCE = 100.0
+MRR30_CAN_RADAR_RAW_MIN_DISTANCE = 0.05
 MRR30_CAN_RADAR_SELECTED_ADDR = 0x5ED
 MRR30_CAN_RADAR_SELECTED_MIN_DISTANCE = 0.75
 MRR30_CAN_RADAR_SELECTED_MAX_DISTANCE = 100.0
@@ -33,6 +33,9 @@ MRR30_CAN_RADAR_SELECTED_PLACEHOLDER_MIN_DISTANCE = 49.5
 MRR30_CAN_RADAR_SELECTED_PLACEHOLDER_MAX_DISTANCE = 50.8
 MRR30_CAN_RADAR_SELECTED_PLACEHOLDER_MAX_VREL = 0.15
 MRR30_CAN_RADAR_SELECTED_MAX_AGE_NS = 300_000_000
+MRR30_CAN_RADAR_SELECTED_HISTORY = 10
+MRR30_CAN_RADAR_SELECTED_TAKEOFF_DISTANCE_DELTA = 1.0
+MRR30_CAN_RADAR_SELECTED_TAKEOFF_NEGATIVE_VREL = -0.2
 MRR30_CAN_RADAR_SELECTED_MATCH_MAX_Y = 2.0
 MRR30_CAN_RADAR_SELECTED_MATCH_MAX_DISTANCE_DELTA = 35.0
 
@@ -95,6 +98,7 @@ class RadarInterface(RadarInterfaceBase, RadarInterfaceExt):
     self.mrr30_can_selected_v_rel = float('nan')
     self.mrr30_can_selected_ts = 0
     self.mrr30_can_ts = 0
+    self.mrr30_can_selected_d_history = deque(maxlen=MRR30_CAN_RADAR_SELECTED_HISTORY)
 
     self.radar_off_can = CP.radarUnavailable
     selected_addr = None
@@ -179,14 +183,25 @@ class RadarInterface(RadarInterfaceBase, RadarInterfaceExt):
       abs(selected_v_rel) <= MRR30_CAN_RADAR_SELECTED_PLACEHOLDER_MAX_VREL
     )
     selected_stale = self.mrr30_can_ts - self.mrr30_can_selected_ts > MRR30_CAN_RADAR_SELECTED_MAX_AGE_NS
-    selected_valid = selected_valid and not selected_placeholder and not selected_stale
+    if selected_placeholder:
+      self.mrr30_can_selected_d_history.clear()
+
+    selected_takeoff_stale = (
+      selected_valid and self.mrr30_can_selected_d_history and
+      selected_v_rel < MRR30_CAN_RADAR_SELECTED_TAKEOFF_NEGATIVE_VREL and
+      selected_d_rel - min(self.mrr30_can_selected_d_history) > MRR30_CAN_RADAR_SELECTED_TAKEOFF_DISTANCE_DELTA
+    )
+    if selected_valid and not selected_placeholder:
+      self.mrr30_can_selected_d_history.append(selected_d_rel)
+
+    selected_valid = selected_valid and not selected_placeholder and not selected_stale and not selected_takeoff_stale
 
     for addr in range(MRR30_CAN_RADAR_ADDR, MRR30_CAN_RADAR_TRACK_END, MRR30_CAN_RADAR_GROUP_SIZE):
       msg0 = self.rcp.vl[f"RADAR_TRACK_{addr:x}"]
       msg1 = self.rcp.vl[f"RADAR_TRACK_{addr + 1:x}"]
       d_rel = msg0["LONG_DIST"]
 
-      if MRR30_CAN_RADAR_RAW_MIN_DISTANCE < d_rel < MRR30_CAN_RADAR_RAW_MAX_DISTANCE:
+      if d_rel > MRR30_CAN_RADAR_RAW_MIN_DISTANCE:
         point = structs.RadarData.RadarPoint()
         point.trackId = addr
         point.measured = True
