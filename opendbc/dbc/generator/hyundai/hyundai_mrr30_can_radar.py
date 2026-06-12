@@ -48,20 +48,19 @@ BU_: XXX
     """)
 
   # MRR30_CAN emits one radar track across three 8-byte messages. The route-proven
-  # track groups are 0x238-0x255. LONG_DIST/LAT_DIST are raw radar coordinates;
-  # they are kept for Cabana/debug, but are not used to publish RadarPoint on
-  # Elantra HEV. 0x5ed carries the radar-selected target distance/speed and
-  # matches stock SCC selected lead distance/speed on route data. Raw-track
-  # REL_SPEED remains analysis-only; acceleration and lateral velocity are
-  # unconfirmed. SELECTED_LONG_DIST combines the 13-bit lower distance and the 1-bit bank
+  # track groups are 0x238-0x255. LONG_DIST and LAT_DIST are decoded from msg0;
+  # the old candidate fields at 6|7 and 55|8 were aliases/noise, not stable
+  # object coordinates. 0x5ed carries the radar-selected target distance/speed
+  # and remains in the DBC for Cabana/reference comparisons.
+  #
+  # SELECTED_LONG_DIST combines the 13-bit lower distance and the 1-bit bank
   # (which is bit 17) into a single 14-bit signal spanning up to 102.39m.
   # SELECTED_REL_SPEED starts after that bank bit at bit 19.
   for addr in range(0x238, 0x256, 3):
     parts.append(f"""
 BO_ {addr} RADAR_TRACK_{addr:x}: 8 RADAR
- SG_ LONG_DIST : 6|7@0+ (1,0) [0|127] "m" XXX
- SG_ STATE : 9|2@0+ (1,0) [0|3] "" XXX
- SG_ LAT_DIST : 55|8@0- (0.1,0) [-12.8|12.7] "m" XXX
+ SG_ LONG_DIST : 7|14@0+ (0.025,0) [0|409.575] "m" XXX
+ SG_ LAT_DIST : 22|9@0- (-0.15,0) [-38.25|38.4] "m" XXX
 
 BO_ {addr + 1} RADAR_TRACK_{addr + 1:x}: 8 RADAR
  SG_ UNKNOWN_1 : 6|10@1+ (1,0) [0|1023] "" XXX
