@@ -1,5 +1,4 @@
 import math
-from collections import deque
 
 from opendbc.can.parser import CANParser
 from opendbc.car import Bus, structs
@@ -27,9 +26,6 @@ MRR30_CAN_RADAR_SIGNATURE = (0x238, 0x239, 0x23a, 0x255)
 MRR30_CAN_RADAR_SELECTED_ADDR = 0x5ED
 MRR30_CAN_RADAR_SELECTED_MSG = f"RADAR_SELECTED_{MRR30_CAN_RADAR_SELECTED_ADDR:x}"
 MRR30_CAN_RADAR_SELECTED_MIN_DISTANCE = 0.0
-MRR30_CAN_RADAR_SELECTED_INCREASE_HISTORY = 50
-MRR30_CAN_RADAR_TAKEOFF_DISTANCE_DELTA = 1.0
-MRR30_CAN_RADAR_TAKEOFF_NEGATIVE_VREL = -0.2
 
 # POC for parsing corner radars: https://github.com/commaai/openpilot/pull/24221/
 
@@ -74,7 +70,6 @@ class RadarInterface(RadarInterfaceBase, RadarInterfaceExt):
     self.updated_messages = set()
     self.trigger_msg = MRR30_CAN_RADAR_SELECTED_ADDR if self.mrr30_can_radar else self.radar_addr + self.radar_count - 1
     self.track_id = 0
-    self.mrr30_can_selected_d_history = deque(maxlen=MRR30_CAN_RADAR_SELECTED_INCREASE_HISTORY)
 
     self.radar_off_can = CP.radarUnavailable
     selected_addr = MRR30_CAN_RADAR_SELECTED_ADDR if self.mrr30_can_radar else None
@@ -145,21 +140,13 @@ class RadarInterface(RadarInterfaceBase, RadarInterfaceExt):
     selected_d_rel = selected_msg["SELECTED_LONG_DIST"]
     selected_v_rel = selected_msg["SELECTED_REL_SPEED"]
     selected_valid = math.isfinite(selected_d_rel) and selected_d_rel > MRR30_CAN_RADAR_SELECTED_MIN_DISTANCE
-    stale_takeoff = (
-      selected_valid and self.mrr30_can_selected_d_history and
-      selected_v_rel < MRR30_CAN_RADAR_TAKEOFF_NEGATIVE_VREL and
-      selected_d_rel - min(self.mrr30_can_selected_d_history) > MRR30_CAN_RADAR_TAKEOFF_DISTANCE_DELTA
-    )
 
     # 0x5ed is the radar-selected target and matches stock SCC selected distance
     # and speed. Publish every positive selected target, including the 50.2m/0mps
     # selected-radar idle point, and let radard/model matching decide whether it
     # should become a lead.
-    # Stale takeoff samples are dropped before updating history; otherwise a stale
-    # far point can teach the guard that the stale distance is the new baseline.
     self.pts.clear()
-    if selected_valid and not stale_takeoff:
-      self.mrr30_can_selected_d_history.append(selected_d_rel)
+    if selected_valid:
       point = structs.RadarData.RadarPoint()
       point.trackId = 0
       point.measured = True
