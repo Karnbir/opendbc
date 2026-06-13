@@ -25,7 +25,6 @@ MRR30_CAN_RADAR_TRACK_END = MRR30_CAN_RADAR_ADDR + (MRR30_CAN_RADAR_TRACK_COUNT 
 MRR30_CAN_RADAR_SIGNATURE = (0x238, 0x239, 0x23a, 0x255)
 MRR30_CAN_RADAR_SELECTED_ADDR = 0x5ED
 MRR30_CAN_RADAR_SELECTED_MSG = f"RADAR_SELECTED_{MRR30_CAN_RADAR_SELECTED_ADDR:x}"
-MRR30_CAN_RADAR_SELECTED_MIN_DISTANCE = 0.0
 
 # POC for parsing corner radars: https://github.com/commaai/openpilot/pull/24221/
 
@@ -139,23 +138,20 @@ class RadarInterface(RadarInterfaceBase, RadarInterfaceExt):
     selected_msg = self.rcp.vl[MRR30_CAN_RADAR_SELECTED_MSG]
     selected_d_rel = selected_msg["SELECTED_LONG_DIST"]
     selected_v_rel = selected_msg["SELECTED_REL_SPEED"]
-    selected_valid = math.isfinite(selected_d_rel) and selected_d_rel > MRR30_CAN_RADAR_SELECTED_MIN_DISTANCE
 
     # 0x5ed is the radar-selected target and matches stock SCC selected distance
-    # and speed. Publish every positive selected target, including the 50.2m/0mps
-    # selected-radar idle point, and let radard/model matching decide whether it
-    # should become a lead.
+    # and speed. Publish it directly and let radard/model matching decide whether
+    # it should become a lead.
     self.pts.clear()
-    if selected_valid:
-      point = structs.RadarData.RadarPoint()
-      point.trackId = 0
-      point.measured = True
-      point.dRel = selected_d_rel
-      point.yRel = 0.0
-      point.vRel = selected_v_rel
-      point.aRel = float('nan')
-      point.yvRel = float('nan')
-      self.pts[MRR30_CAN_RADAR_SELECTED_ADDR] = point
+    point = structs.RadarData.RadarPoint()
+    point.trackId = 0
+    point.measured = True
+    point.dRel = selected_d_rel
+    point.yRel = 0.0
+    point.vRel = selected_v_rel
+    point.aRel = float('nan')
+    point.yvRel = float('nan')
+    self.pts[MRR30_CAN_RADAR_SELECTED_ADDR] = point
 
     ret.points = list(self.pts.values())
     return ret
