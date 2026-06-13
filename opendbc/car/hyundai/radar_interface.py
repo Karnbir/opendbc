@@ -28,9 +28,6 @@ MRR30_CAN_RADAR_SELECTED_ADDR = 0x5ED
 MRR30_CAN_RADAR_SELECTED_MSG = f"RADAR_SELECTED_{MRR30_CAN_RADAR_SELECTED_ADDR:x}"
 MRR30_CAN_RADAR_SELECTED_MIN_DISTANCE = 0.0
 MRR30_CAN_RADAR_SELECTED_INCREASE_HISTORY = 50
-MRR30_CAN_RADAR_SELECTED_PLACEHOLDER_MIN_DISTANCE = 49.5
-MRR30_CAN_RADAR_SELECTED_PLACEHOLDER_MAX_DISTANCE = 50.8
-MRR30_CAN_RADAR_SELECTED_PLACEHOLDER_MAX_VREL = 0.15
 MRR30_CAN_RADAR_TAKEOFF_DISTANCE_DELTA = 1.0
 MRR30_CAN_RADAR_TAKEOFF_NEGATIVE_VREL = -0.2
 
@@ -148,26 +145,20 @@ class RadarInterface(RadarInterfaceBase, RadarInterfaceExt):
     selected_d_rel = selected_msg["SELECTED_LONG_DIST"]
     selected_v_rel = selected_msg["SELECTED_REL_SPEED"]
     selected_valid = math.isfinite(selected_d_rel) and selected_d_rel > MRR30_CAN_RADAR_SELECTED_MIN_DISTANCE
-    selected_placeholder = (
-      MRR30_CAN_RADAR_SELECTED_PLACEHOLDER_MIN_DISTANCE <= selected_d_rel <= MRR30_CAN_RADAR_SELECTED_PLACEHOLDER_MAX_DISTANCE and
-      abs(selected_v_rel) <= MRR30_CAN_RADAR_SELECTED_PLACEHOLDER_MAX_VREL
-    )
-    selected_real = selected_valid and not selected_placeholder
     stale_takeoff = (
-      selected_real and self.mrr30_can_selected_d_history and
+      selected_valid and self.mrr30_can_selected_d_history and
       selected_v_rel < MRR30_CAN_RADAR_TAKEOFF_NEGATIVE_VREL and
       selected_d_rel - min(self.mrr30_can_selected_d_history) > MRR30_CAN_RADAR_TAKEOFF_DISTANCE_DELTA
     )
 
     # 0x5ed is the radar-selected target and matches stock SCC selected distance
-    # and speed. 50.2m/0mps is a no-lead placeholder; it should not publish a
-    # RadarPoint, but it clears history so the next real far target is fresh.
+    # and speed. Publish every positive selected target, including the 50.2m/0mps
+    # selected-radar idle point, and let radard/model matching decide whether it
+    # should become a lead.
     # Stale takeoff samples are dropped before updating history; otherwise a stale
     # far point can teach the guard that the stale distance is the new baseline.
     self.pts.clear()
-    if selected_placeholder:
-      self.mrr30_can_selected_d_history.clear()
-    elif selected_real and not stale_takeoff:
+    if selected_valid and not stale_takeoff:
       self.mrr30_can_selected_d_history.append(selected_d_rel)
       point = structs.RadarData.RadarPoint()
       point.trackId = 0
