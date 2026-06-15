@@ -30,8 +30,8 @@ MRR30_CAN_RADAR_IDLE_DISTANCE_TOLERANCE = 0.02
 MRR30_CAN_RADAR_IDLE_SPEED_TOLERANCE = 0.05
 MRR30_CAN_RADAR_SELECTED_ACCEL_MIN = -8.0
 MRR30_CAN_RADAR_SELECTED_ACCEL_MAX = 8.0
-MRR30_CAN_RADAR_SELECTED_ACCEL_MAX_DT = 0.2
-MRR30_CAN_RADAR_SELECTED_ACCEL_RESET_DISTANCE = 5.0
+MRR30_CAN_RADAR_SELECTED_ACCEL_MAX_DT = 0.2  # 0x5ed is 20Hz; allow occasional jitter.
+MRR30_CAN_RADAR_SELECTED_ACCEL_MAX_D_REL_STEP = 5.0
 MRR30_CAN_RADAR_SELECTED_ACCEL_ALPHA = 0.2
 
 # POC for parsing corner radars: https://github.com/commaai/openpilot/pull/24221/
@@ -117,7 +117,7 @@ class RadarInterface(RadarInterfaceBase, RadarInterfaceExt):
       return self.update_ext(ret)
 
     if self.mrr30_can_radar:
-      return self._update_mrr30_can(ret, updated_messages)
+      return self._update_mrr30_can(ret)
 
     for addr in range(self.radar_addr, self.radar_addr + self.radar_count):
       msg = self.rcp.vl[f"RADAR_TRACK_{addr:x}"]
@@ -142,15 +142,18 @@ class RadarInterface(RadarInterfaceBase, RadarInterfaceExt):
     ret.points = list(self.pts.values())
     return ret
 
-  def _calculate_mrr30_can_selected_a_rel(self, d_rel, v_rel, valid):
-    ts = self.rcp.ts_nanos[MRR30_CAN_RADAR_SELECTED_MSG]["SELECTED_REL_SPEED"]
+  def _reset_mrr30_can_selected_accel(self):
+    self.mrr30_can_selected_prev_d_rel = float('nan')
+    self.mrr30_can_selected_prev_v_rel = float('nan')
+    self.mrr30_can_selected_prev_ts = 0
+    self.mrr30_can_selected_a_rel = 0.0
+
+  def _update_mrr30_can_selected_a_rel(self, d_rel, v_rel, valid):
     if not valid:
-      self.mrr30_can_selected_prev_d_rel = float('nan')
-      self.mrr30_can_selected_prev_v_rel = float('nan')
-      self.mrr30_can_selected_prev_ts = 0
-      self.mrr30_can_selected_a_rel = 0.0
+      self._reset_mrr30_can_selected_accel()
       return float('nan')
 
+    ts = self.rcp.ts_nanos[MRR30_CAN_RADAR_SELECTED_MSG]["SELECTED_REL_SPEED"]
     prev_ts = self.mrr30_can_selected_prev_ts
     prev_d_rel = self.mrr30_can_selected_prev_d_rel
     prev_v_rel = self.mrr30_can_selected_prev_v_rel
@@ -161,7 +164,7 @@ class RadarInterface(RadarInterfaceBase, RadarInterfaceExt):
       0.0 < dt <= MRR30_CAN_RADAR_SELECTED_ACCEL_MAX_DT and
       math.isfinite(prev_d_rel) and
       math.isfinite(prev_v_rel) and
-      abs(d_rel - prev_d_rel) <= MRR30_CAN_RADAR_SELECTED_ACCEL_RESET_DISTANCE
+      abs(d_rel - prev_d_rel) <= MRR30_CAN_RADAR_SELECTED_ACCEL_MAX_D_REL_STEP
     )
     if continuous:
       raw_a_rel = (v_rel - prev_v_rel) / dt
@@ -178,9 +181,9 @@ class RadarInterface(RadarInterfaceBase, RadarInterfaceExt):
     self.mrr30_can_selected_a_rel = a_rel
     return a_rel
 
-  def _update_mrr30_can(self, ret, updated_messages):
+  def _update_mrr30_can(self, ret):
     if not (self.CP_SP.flags & HyundaiFlagsSP.RADAR_FULL_RADAR):
-      self._calculate_mrr30_can_selected_a_rel(0.0, 0.0, False)
+      self._reset_mrr30_can_selected_accel()
       ret.points = []
       return ret
 
@@ -195,7 +198,7 @@ class RadarInterface(RadarInterfaceBase, RadarInterfaceExt):
     # 0x5ed is the radar-selected target and matches stock SCC selected distance
     # and speed. The radar reports 50.2m/0mps as its idle no-lead value.
     self.pts.clear()
-    selected_a_rel = self._calculate_mrr30_can_selected_a_rel(selected_d_rel, selected_v_rel, not selected_idle)
+    selected_a_rel = self._update_mrr30_can_selected_a_rel(selected_d_rel, selected_v_rel, not selected_idle)
     if not selected_idle:
       point = structs.RadarData.RadarPoint()
       point.trackId = 0
