@@ -47,13 +47,13 @@ BS_:
 BU_: XXX
     """)
 
-  # MRR30_CAN emits one radar track across three 8-byte messages. The route-proven
-  # track groups are 0x238-0x255. LONG_DIST/LAT_DIST are raw radar coordinates;
-  # they are kept for Cabana/debug, but are not used to publish RadarPoint on
-  # Elantra HEV. 0x5ed carries the radar-selected target distance/speed and
-  # matches stock SCC selected lead distance/speed on route data. Raw-track
-  # REL_SPEED remains analysis-only; acceleration and lateral velocity are
-  # unconfirmed. SELECTED_LONG_DIST combines the 13-bit lower distance and the 1-bit bank
+  # MRR30_CAN emits one raw object group across three 8-byte messages. The
+  # route-proven groups are 0x238-0x255. These raw fields are kept for
+  # Cabana/debug only; Elantra HEV publishes the SCC-selected 0x5ed lead as its
+  # RadarPoint. Raw-track REL_SPEED, acceleration, and lateral velocity remain
+  # analysis-only.
+  #
+  # SELECTED_LONG_DIST combines the 13-bit lower distance and the 1-bit bank
   # (which is bit 17) into a single 14-bit signal spanning up to 102.39m.
   # SELECTED_REL_SPEED starts after that bank bit at bit 19.
   for addr in range(0x238, 0x256, 3):

@@ -2,18 +2,19 @@ from hypothesis import settings, given, strategies as st
 
 import unittest
 
-from opendbc.car import gen_empty_fingerprint
+from opendbc.car import gen_empty_fingerprint, structs
 from opendbc.car.structs import CarParams
 from opendbc.car.fw_versions import build_fw_dict
 from opendbc.car.hyundai.interface import CarInterface
 from opendbc.car.hyundai.hyundaicanfd import CanBus
-from opendbc.car.hyundai.radar_interface import RADAR_START_ADDR, MRR30_CAN_RADAR_SIGNATURE
+from opendbc.car.hyundai.radar_interface import RADAR_START_ADDR, MRR30_CAN_RADAR_SELECTED_MSG, MRR30_CAN_RADAR_SIGNATURE, RadarInterface
 from opendbc.car.hyundai.values import CAMERA_SCC_CAR, CANFD_CAR, CAN_GEARS, CAR, CHECKSUM, DATE_FW_ECUS, \
                                          HYBRID_CAR, EV_CAR, FW_QUERY_CONFIG, LEGACY_SAFETY_MODE_CAR, CANFD_FUZZY_WHITELIST, \
                                          UNSUPPORTED_LONGITUDINAL_CAR, PLATFORM_CODE_ECUS, HYUNDAI_VERSION_REQUEST_LONG, \
                                          HyundaiFlags, get_platform_codes, HyundaiSafetyFlags, \
                                          NON_SCC_CAR
 from opendbc.car.hyundai.fingerprints import FW_VERSIONS
+from opendbc.sunnypilot.car.hyundai.values import HyundaiFlagsSP
 
 Ecu = CarParams.Ecu
 
@@ -42,6 +43,75 @@ NO_DATES_PLATFORMS = {
 }
 
 CANFD_EXPECTED_ECUS = {Ecu.fwdCamera, Ecu.fwdRadar}
+
+
+class TestHyundaiRadarInterface(unittest.TestCase):
+  @staticmethod
+  def mrr30_can_interface(d_rel=12.5, v_rel=-1.2, full_radar=True, ts=100_000_000):
+    interface = RadarInterface.__new__(RadarInterface)
+    flags = HyundaiFlagsSP.RADAR_FULL_RADAR if full_radar else 0
+    interface.CP_SP = type("CP_SP", (), {"flags": flags})()
+    interface.pts = {}
+    interface.mrr30_can_selected_prev_d_rel = float('nan')
+    interface.mrr30_can_selected_prev_v_rel = float('nan')
+    interface.mrr30_can_selected_prev_ts = 0
+    interface.mrr30_can_selected_a_rel = 0.0
+    interface.rcp = type("RCP", (), {
+      "vl": {
+        MRR30_CAN_RADAR_SELECTED_MSG: {
+          "SELECTED_LONG_DIST": d_rel,
+          "SELECTED_REL_SPEED": v_rel,
+        },
+      },
+      "ts_nanos": {
+        MRR30_CAN_RADAR_SELECTED_MSG: {
+          "SELECTED_REL_SPEED": ts,
+        },
+      },
+    })()
+    return interface
+
+  def test_mrr30_can_publishes_only_selected_lead(self):
+    ret = RadarInterface._update_mrr30_can(self.mrr30_can_interface(), structs.RadarData())
+
+    assert len(ret.points) == 1
+    point = ret.points[0]
+    assert point.trackId == 0
+    self.assertAlmostEqual(point.dRel, 12.5)
+    self.assertAlmostEqual(point.yRel, 0.0)
+    self.assertAlmostEqual(point.vRel, -1.2, places=5)
+    self.assertAlmostEqual(point.aRel, 0.0)
+    assert not point.yvRel == point.yvRel
+
+  def test_mrr30_can_drops_selected_placeholder(self):
+    interface = self.mrr30_can_interface(50.2, 0.0)
+    interface.mrr30_can_selected_prev_d_rel = 10.0
+    interface.mrr30_can_selected_prev_v_rel = -1.0
+    interface.mrr30_can_selected_prev_ts = 50_000_000
+    interface.mrr30_can_selected_a_rel = 1.0
+    ret = RadarInterface._update_mrr30_can(interface, structs.RadarData())
+
+    assert len(ret.points) == 0
+    assert not interface.mrr30_can_selected_prev_d_rel == interface.mrr30_can_selected_prev_d_rel
+    assert not interface.mrr30_can_selected_prev_v_rel == interface.mrr30_can_selected_prev_v_rel
+    assert interface.mrr30_can_selected_prev_ts == 0
+    assert interface.mrr30_can_selected_a_rel == 0.0
+
+  def test_mrr30_can_derives_selected_accel(self):
+    interface = self.mrr30_can_interface(12.5, -1.0, ts=100_000_000)
+    ret = RadarInterface._update_mrr30_can(interface, structs.RadarData())
+    self.assertAlmostEqual(ret.points[0].aRel, 0.0)
+
+    selected_msg = interface.rcp.vl[MRR30_CAN_RADAR_SELECTED_MSG]
+    selected_msg["SELECTED_REL_SPEED"] = -0.5
+    interface.rcp.ts_nanos[MRR30_CAN_RADAR_SELECTED_MSG]["SELECTED_REL_SPEED"] = 150_000_000
+    ret = RadarInterface._update_mrr30_can(interface, structs.RadarData())
+    self.assertAlmostEqual(ret.points[0].aRel, 1.6)
+
+  def test_mrr30_can_requires_full_radar_flag(self):
+    ret = RadarInterface._update_mrr30_can(self.mrr30_can_interface(full_radar=False), structs.RadarData())
+
+    assert len(ret.points) == 0
 
 
 class TestHyundaiFingerprint(unittest.TestCase):
