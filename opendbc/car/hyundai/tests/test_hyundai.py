@@ -1,15 +1,15 @@
 import unittest
 
-from opendbc.car import gen_empty_fingerprint
+from opendbc.car import Bus, gen_empty_fingerprint, structs
 from opendbc.car.structs import CarParams
 from opendbc.car.fw_versions import build_fw_dict
 from opendbc.car.hyundai.interface import CarInterface
 from opendbc.car.hyundai.hyundaicanfd import CanBus
-from opendbc.car.hyundai.radar_interface import RADAR_START_ADDR
+from opendbc.car.hyundai.radar_interface import SCC_SELECTED_LEAD_ADDR, SCC_SELECTED_LEAD_MSG, RADAR_START_ADDR, RadarInterface
 from opendbc.car.hyundai.values import CAR, DATE_FW_ECUS, \
                                          FW_QUERY_CONFIG, CANFD_FUZZY_WHITELIST, \
                                          PLATFORM_CODE_ECUS, HYUNDAI_VERSION_REQUEST_LONG, \
-                                         HyundaiFlags, get_platform_codes, HyundaiSafetyFlags, \
+                                         DBC, HyundaiFlags, get_platform_codes, HyundaiSafetyFlags, \
                                          NON_SCC_CAR
 from opendbc.car.hyundai.fingerprints import FW_VERSIONS
 from opendbc.testing import fuzzy_test
@@ -45,11 +45,45 @@ CANFD_EXPECTED_ECUS = {Ecu.fwdCamera, Ecu.fwdRadar}
 # CAN-only feature flags that should not appear on CAN FD platforms
 CAN_FEATURE_FLAGS = (HyundaiFlags.CLUSTER_GEARS | HyundaiFlags.TCU_GEARS | HyundaiFlags.CHECKSUM_CRC8 |
                      HyundaiFlags.CHECKSUM_6B | HyundaiFlags.LEGACY | HyundaiFlags.UNSUPPORTED_LONGITUDINAL |
-                     HyundaiFlags.CAMERA_SCC)
+                     HyundaiFlags.CAMERA_SCC | HyundaiFlags.SCC_SELECTED_LEAD)
 
 
 def cars_with(flags):
   return {c for c in CAR if c.config.flags & flags}
+
+
+class TestHyundaiRadarInterface(unittest.TestCase):
+  @staticmethod
+  def scc_selected_lead_interface(d_rel=12.5, v_rel=-1.2):
+    interface = RadarInterface.__new__(RadarInterface)
+    interface.rcp = type("RCP", (), {
+      "vl": {
+        SCC_SELECTED_LEAD_MSG: {
+          "SELECTED_LONG_DIST": d_rel,
+          "SELECTED_REL_SPEED": v_rel,
+        },
+      },
+    })()
+    return interface
+
+  def test_scc_selected_lead_publishes_point(self):
+    ret = RadarInterface._update_scc_selected_lead(self.scc_selected_lead_interface(), structs.RadarData())
+
+    self.assertEqual(len(ret.points), 1)
+    point = ret.points[0]
+    self.assertEqual(point.trackId, 0)
+    self.assertAlmostEqual(point.dRel, 12.5)
+    self.assertAlmostEqual(point.yRel, 0.0)
+    self.assertAlmostEqual(point.vRel, -1.2, places=5)
+
+  def test_scc_selected_lead_drops_idle_value(self):
+    for d_rel in (50.2, 50.20625):
+      with self.subTest(d_rel=d_rel):
+        interface = self.scc_selected_lead_interface(d_rel, 0.0)
+
+        ret = RadarInterface._update_scc_selected_lead(interface, structs.RadarData())
+
+        self.assertEqual(len(ret.points), 0)
 
 
 class TestHyundaiFingerprint(unittest.TestCase):
@@ -70,6 +104,17 @@ class TestHyundaiFingerprint(unittest.TestCase):
         fingerprint[1][RADAR_START_ADDR] = 8
       CP = CarInterface.get_params(CAR.HYUNDAI_SONATA, fingerprint, [], False, False, False)
       assert CP.radarUnavailable != radar
+
+    for car_model in (CAR.HYUNDAI_ELANTRA_2021, CAR.HYUNDAI_ELANTRA_HEV_2021):
+      fingerprint = gen_empty_fingerprint()
+      fingerprint[1][SCC_SELECTED_LEAD_ADDR] = 8
+      CP = CarInterface.get_params(car_model, fingerprint, [], False, False, False)
+      self.assertFalse(CP.radarUnavailable)
+      self.assertEqual(DBC[CP.carFingerprint][Bus.radar], "hyundai_scc_selected_lead_generated")
+
+      fingerprint[1].pop(SCC_SELECTED_LEAD_ADDR)
+      CP = CarInterface.get_params(car_model, fingerprint, [], False, False, False)
+      self.assertTrue(CP.radarUnavailable)
 
   def test_alternate_limits(self):
     # Alternate lateral control limits, for high torque cars, verify Panda safety mode flag is set

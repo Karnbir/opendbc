@@ -3,12 +3,18 @@ import math
 from opendbc.can import CANParser
 from opendbc.car import Bus, structs
 from opendbc.car.interfaces import RadarInterfaceBase
-from opendbc.car.hyundai.values import DBC
+from opendbc.car.hyundai.values import DBC, HyundaiFlags
 
 from opendbc.sunnypilot.car.hyundai.radar_interface_ext import RadarInterfaceExt
 
 RADAR_START_ADDR = 0x500
 RADAR_MSG_COUNT = 32
+SCC_SELECTED_LEAD_ADDR = 0x5ED
+SCC_SELECTED_LEAD_MSG = f"SCC_SELECTED_LEAD_{SCC_SELECTED_LEAD_ADDR:x}"
+SCC_SELECTED_LEAD_IDLE_DISTANCE = 50.2
+# The no-lead value varies by a few 6.25 mm distance bins in recorded routes.
+SCC_SELECTED_LEAD_IDLE_DISTANCE_TOLERANCE = 0.02
+SCC_SELECTED_LEAD_IDLE_SPEED_TOLERANCE = 0.05
 
 # POC for parsing corner radars: https://github.com/commaai/openpilot/pull/24221/
 
@@ -17,7 +23,10 @@ def get_radar_can_parser(CP):
   if Bus.radar not in DBC[CP.carFingerprint]:
     return None
 
-  messages = [(f"RADAR_TRACK_{addr:x}", 50) for addr in range(RADAR_START_ADDR, RADAR_START_ADDR + RADAR_MSG_COUNT)]
+  if CP.flags & HyundaiFlags.SCC_SELECTED_LEAD:
+    messages = [(SCC_SELECTED_LEAD_MSG, 20)]
+  else:
+    messages = [(f"RADAR_TRACK_{addr:x}", 50) for addr in range(RADAR_START_ADDR, RADAR_START_ADDR + RADAR_MSG_COUNT)]
   return CANParser(DBC[CP.carFingerprint][Bus.radar], messages, 1)
 
 
@@ -25,8 +34,9 @@ class RadarInterface(RadarInterfaceBase, RadarInterfaceExt):
   def __init__(self, CP, CP_SP):
     RadarInterfaceBase.__init__(self, CP, CP_SP)
     RadarInterfaceExt.__init__(self, CP, CP_SP)
+    self.scc_selected_lead = bool(CP.flags & HyundaiFlags.SCC_SELECTED_LEAD)
     self.updated_messages = set()
-    self.trigger_msg = RADAR_START_ADDR + RADAR_MSG_COUNT - 1
+    self.trigger_msg = SCC_SELECTED_LEAD_ADDR if self.scc_selected_lead else RADAR_START_ADDR + RADAR_MSG_COUNT - 1
 
     self.radar_off_can = CP.radarUnavailable
     self.rcp = get_radar_can_parser(CP)
@@ -60,6 +70,9 @@ class RadarInterface(RadarInterfaceBase, RadarInterfaceExt):
     if self.use_radar_interface_ext:
       return self.update_ext(ret)
 
+    if self.scc_selected_lead:
+      return self._update_scc_selected_lead(ret)
+
     for addr in range(RADAR_START_ADDR, RADAR_START_ADDR + RADAR_MSG_COUNT):
       msg = self.rcp.vl[f"RADAR_TRACK_{addr:x}"]
 
@@ -79,4 +92,24 @@ class RadarInterface(RadarInterfaceBase, RadarInterfaceExt):
         del self.pts[addr]
 
     ret.points = list(self.pts.values())
+    return ret
+
+  def _update_scc_selected_lead(self, ret):
+    msg = self.rcp.vl[SCC_SELECTED_LEAD_MSG]
+    d_rel = msg["SELECTED_LONG_DIST"]
+    v_rel = msg["SELECTED_REL_SPEED"]
+    idle = (
+      abs(d_rel - SCC_SELECTED_LEAD_IDLE_DISTANCE) <= SCC_SELECTED_LEAD_IDLE_DISTANCE_TOLERANCE and
+      abs(v_rel) <= SCC_SELECTED_LEAD_IDLE_SPEED_TOLERANCE
+    )
+
+    # 0x5ED is the stock SCC-selected target; 50.2 m at 0 m/s is its no-lead value.
+    if not idle:
+      point = structs.RadarData.RadarPoint()
+      point.trackId = 0
+      point.dRel = d_rel
+      point.yRel = 0.0
+      point.vRel = v_rel
+      ret.points = [point]
+
     return ret
