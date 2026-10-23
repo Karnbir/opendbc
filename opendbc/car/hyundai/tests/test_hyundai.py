@@ -1,5 +1,6 @@
 import unittest
 
+from opendbc.can import CANPacker
 from opendbc.car import Bus, gen_empty_fingerprint, structs
 from opendbc.car.structs import CarParams
 from opendbc.car.fw_versions import build_fw_dict
@@ -27,6 +28,7 @@ NO_DATES_PLATFORMS = {
   CAR.HYUNDAI_ELANTRA,
   CAR.HYUNDAI_ELANTRA_GT_I30,
   CAR.KIA_CEED,
+  CAR.KIA_CEED_PHEV,
   CAR.KIA_FORTE,
   CAR.KIA_OPTIMA_G4,
   CAR.KIA_OPTIMA_G4_FL,
@@ -54,36 +56,94 @@ def cars_with(flags):
 
 class TestHyundaiRadarInterface(unittest.TestCase):
   @staticmethod
-  def scc_selected_lead_interface(d_rel=12.5, v_rel=-1.2):
-    interface = RadarInterface.__new__(RadarInterface)
-    interface.rcp = type("RCP", (), {
-      "vl": {
-        SCC_SELECTED_LEAD_MSG: {
-          "SELECTED_LONG_DIST": d_rel,
-          "SELECTED_REL_SPEED": v_rel,
-        },
-      },
-    })()
-    return interface
+  def scc_selected_lead_interface(car_model=CAR.HYUNDAI_ELANTRA_2021):
+    fingerprint = gen_empty_fingerprint()
+    fingerprint[1][SCC_SELECTED_LEAD_ADDR] = 8
+    CP = CarInterface.get_params(car_model, fingerprint, [], False, False, False)
+    return RadarInterface(CP, structs.CarParamsSP())
+
+  @staticmethod
+  def selected_lead_message(d_rel, v_rel, bus=1):
+    packer = CANPacker("hyundai_scc_selected_lead_generated")
+    return packer.make_can_msg(SCC_SELECTED_LEAD_MSG, bus, {
+      "SELECTED_LONG_DIST": d_rel,
+      "SELECTED_REL_SPEED": v_rel,
+    })
 
   def test_scc_selected_lead_publishes_point(self):
-    ret = RadarInterface._update_scc_selected_lead(self.scc_selected_lead_interface(), structs.RadarData())
+    for car_model in (CAR.HYUNDAI_ELANTRA_2021, CAR.HYUNDAI_ELANTRA_HEV_2021):
+      with self.subTest(car_model=car_model):
+        interface = self.scc_selected_lead_interface(car_model)
+        self.assertFalse(interface.radar_off_can)
+        self.assertEqual(interface.rcp.addresses, {SCC_SELECTED_LEAD_ADDR})
+        # Fixed wire payload: 12.5 m and -1.2 m/s, independent of CANPacker.
+        msg = (SCC_SELECTED_LEAD_ADDR, bytes.fromhex("00 7d a0 3f 00 00 00 00"), 1)
+        ret = interface.update([(1, [msg])])
 
-    self.assertEqual(len(ret.points), 1)
-    point = ret.points[0]
-    self.assertEqual(point.trackId, 0)
-    self.assertAlmostEqual(point.dRel, 12.5)
-    self.assertAlmostEqual(point.yRel, 0.0)
-    self.assertAlmostEqual(point.vRel, -1.2, places=5)
+        self.assertFalse(ret.errors.canError)
+        self.assertEqual(len(ret.points), 1)
+        point = ret.points[0]
+        self.assertEqual(point.trackId, 0)
+        self.assertAlmostEqual(point.dRel, 12.5)
+        self.assertAlmostEqual(point.yRel, 0.0)
+        self.assertAlmostEqual(point.vRel, -1.2, places=5)
 
   def test_scc_selected_lead_drops_idle_value(self):
-    for d_rel in (50.2, 50.20625):
+    for d_rel in (50.18125, 50.2, 50.20625, 50.21875):
       with self.subTest(d_rel=d_rel):
-        interface = self.scc_selected_lead_interface(d_rel, 0.0)
-
-        ret = RadarInterface._update_scc_selected_lead(interface, structs.RadarData())
-
+        interface = self.scc_selected_lead_interface()
+        ret = interface.update([(1, [self.selected_lead_message(d_rel, 0.0)])])
         self.assertEqual(len(ret.points), 0)
+
+  def test_scc_selected_lead_keeps_real_targets_near_idle_value(self):
+    for d_rel, v_rel in ((50.175, 0.0), (50.225, 0.0), (50.2, -0.1), (50.2, 0.1)):
+      with self.subTest(d_rel=d_rel, v_rel=v_rel):
+        interface = self.scc_selected_lead_interface()
+        ret = interface.update([(1, [self.selected_lead_message(d_rel, v_rel)])])
+        self.assertEqual(len(ret.points), 1)
+        self.assertAlmostEqual(ret.points[0].dRel, d_rel, places=4)
+        self.assertAlmostEqual(ret.points[0].vRel, v_rel, places=5)
+
+  def test_scc_selected_lead_clears_lost_target(self):
+    interface = self.scc_selected_lead_interface()
+    for i, (d_rel, v_rel, point_count) in enumerate(((12.5, -1.2, 1), (50.2, 0.0, 0), (25.0, 2.3, 1))):
+      ret = interface.update([(1 + i * 50_000_000, [self.selected_lead_message(d_rel, v_rel)])])
+      self.assertFalse(ret.errors.canError)
+      self.assertEqual(len(ret.points), point_count)
+
+  def test_scc_selected_lead_requires_bus_one_and_trigger(self):
+    interface = self.scc_selected_lead_interface()
+    for i, bus in enumerate((0, 2)):
+      self.assertIsNone(interface.update([(1 + i * 50_000_000, [self.selected_lead_message(12.5, -1.2, bus)])]))
+    self.assertIsNone(interface.update([(100_000_001, [(RADAR_START_ADDR, b"\x00" * 8, 1)])]))
+    ret = interface.update([(150_000_001, [self.selected_lead_message(12.5, -1.2)])])
+    self.assertEqual(len(ret.points), 1)
+
+  def test_scc_selected_lead_missing_from_fingerprint(self):
+    fingerprint = gen_empty_fingerprint()
+    fingerprint[1][RADAR_START_ADDR] = 8
+    CP = CarInterface.get_params(CAR.HYUNDAI_ELANTRA_2021, fingerprint, [], False, False, False)
+    self.assertTrue(CP.radarUnavailable)
+    interface = RadarInterface(CP, structs.CarParamsSP())
+    for i in range(5):
+      ret = interface.update([(1 + i * 50_000_000, [self.selected_lead_message(12.5, -1.2)])])
+    self.assertEqual(len(ret.points), 0)
+
+  def test_scc_selected_lead_flag_does_not_overlap_bsm(self):
+    for car_model in (CAR.HYUNDAI_ELANTRA_2021, CAR.HYUNDAI_ELANTRA_HEV_2021, CAR.HYUNDAI_SONATA):
+      for bsm in (False, True):
+        with self.subTest(car_model=car_model, bsm=bsm):
+          fingerprint = gen_empty_fingerprint()
+          fingerprint[1][SCC_SELECTED_LEAD_ADDR] = 8
+          fingerprint[1][RADAR_START_ADDR] = 8
+          if bsm:
+            fingerprint[0][0x58b] = 8
+          CP = CarInterface.get_params(car_model, fingerprint, [], False, False, False)
+          self.assertEqual(bool(CP.flags & HyundaiFlags.HAS_BSM), bsm)
+          self.assertEqual(bool(CP.flags & HyundaiFlags.SCC_SELECTED_LEAD), car_model != CAR.HYUNDAI_SONATA)
+          interface = RadarInterface(CP, structs.CarParamsSP())
+          self.assertEqual(interface.scc_selected_lead, car_model != CAR.HYUNDAI_SONATA)
+          self.assertEqual(interface.trigger_msg, SCC_SELECTED_LEAD_ADDR if interface.scc_selected_lead else RADAR_START_ADDR + 31)
 
 
 class TestHyundaiFingerprint(unittest.TestCase):
